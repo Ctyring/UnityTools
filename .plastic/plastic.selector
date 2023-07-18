@@ -1,0 +1,4 @@
+repository "代号：工具集@ctyring@cloud.cn"
+  path "/"
+    br "/main"
+    co "/main"

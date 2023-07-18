@@ -1,0 +1,12 @@
+E:\Game\代号：工具集\HotFix\HotFix\bin\Debug\net6.0\HotFix.deps.json
+E:\Game\代号：工具集\HotFix\HotFix\bin\Debug\net6.0\HotFix.dll
+E:\Game\代号：工具集\HotFix\HotFix\bin\Debug\net6.0\ref\HotFix.dll
+E:\Game\代号：工具集\HotFix\HotFix\bin\Debug\net6.0\HotFix.pdb
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\HotFix.csproj.AssemblyReference.cache
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\HotFix.GeneratedMSBuildEditorConfig.editorconfig
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\HotFix.AssemblyInfoInputs.cache
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\HotFix.AssemblyInfo.cs
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\HotFix.csproj.CoreCompileInputs.cache
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\HotFix.dll
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\ref\HotFix.dll
+E:\Game\代号：工具集\HotFix\HotFix\obj\Debug\net6.0\HotFix.pdb
