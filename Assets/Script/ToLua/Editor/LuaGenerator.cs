@@ -1,10 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Script.ToLua.Editor.luaAst;
 using UnityEditor;
 using UnityEngine;
 
@@ -21,18 +24,90 @@ namespace Script.ToLua.Editor
         private HashSet<INamedTypeSymbol> _typesOfExtendSelf = new(SymbolEqualityComparer.Default);
         private Dictionary<INamedTypeSymbol, string> _typeRefactorNames = new(SymbolEqualityComparer.Default);
         Dictionary<INamespaceSymbol, string> _namespaceRefactorNames = new(SymbolEqualityComparer.Default);
+        private XmlMetaProvider _metaProvider;
+        private string metas = "";
+        public ImmutableList<Expression> assemblyAttributes = ImmutableList<Expression>.Empty;
 
+        public void Init()
+        {
+            BuildCompilation();
+            _metaProvider = new XmlMetaProvider(LoadMeta(LuaTool.Split(metas)));
+        }
+        
         public void CreateLua()
         {
-            foreach (SyntaxTree tree in _compilation.SyntaxTrees)
-            {
-                
+            foreach (SyntaxTree tree in _compilation.SyntaxTrees) {
+                CreateLuaCompilationUnitSyntax(tree);
             }
         }
 
-        void CreateLuaCompilationUnitSyntax(SyntaxTree tree)
+        Thunk CreateLuaCompilationUnitSyntax(SyntaxTree tree)
         {
             var semanticModel = _compilation.GetSemanticModel(tree);
+            var syntax = (CompilationUnitSyntax)tree.GetRoot();
+            LuaSyntaxTreeBuilder builder = new LuaSyntaxTreeBuilder(this, semanticModel);
+            return builder.BuildLuaThunk(syntax);
+        }
+        
+        private string GetNamespaceNames(List<INamespaceSymbol> symbols)
+        {
+            List<string> names = new List<string>();
+            foreach (INamespaceSymbol symbol in symbols)
+            {
+                string name = symbol.Name;
+                if(_namespaceRefactorNames.TryGetValue(symbol, out string refactorName))
+                    name = refactorName;
+                names.Add(name);
+            }
+            return string.Join(".", names);
+        }
+
+        private string GetNamespaceMapName(INamespaceSymbol symbol, string original) {
+            if (!symbol.DeclaringSyntaxReferences.IsEmpty) {
+                return GetNamespaceNames(GetAllNamespaces(symbol));
+            }
+
+            return _metaProvider.GetNamespaceMapName(symbol, original);
+        }
+        
+        public static IEnumerable<INamespaceSymbol> InternalGetAllNamespaces(INamespaceSymbol symbol) {
+            do {
+                yield return symbol;
+                symbol = symbol.ContainingNamespace;
+            } while (!symbol.IsGlobalNamespace);
+        }
+
+        public static List<INamespaceSymbol> GetAllNamespaces(INamespaceSymbol symbol) {
+            if (symbol.IsGlobalNamespace)
+            {
+                return new List<INamespaceSymbol>();
+            }
+            return InternalGetAllNamespaces(symbol).Reverse().ToList();
+        }
+
+        public string GetNamespaceDefineName(INamespaceSymbol symbol, BaseNamespaceDeclarationSyntax node)
+        {
+            string original = node.Name.ToString();
+            if (original == symbol.Name)
+            {
+                return _namespaceRefactorNames.GetValueOrDefault(symbol, original);
+            }
+
+            var namespaces = new List<INamespaceSymbol>() { symbol };
+            do
+            {
+                // 递归获取命名空间
+                symbol = symbol.ContainingNamespace;
+                namespaces.Add(symbol);
+                List<INamespaceSymbol> symbols = namespaces;
+                symbols.Reverse();
+                string symbolsName = string.Join(".", symbols.Select(i => i.Name));
+                if (symbolsName == original) {
+                    return GetNamespaceNames(symbols);
+                }
+            } while (!symbol.IsGlobalNamespace);
+
+            throw new InvalidOperationException();
         }
         
         public void BuildCompilation()
@@ -78,6 +153,17 @@ namespace Script.ToLua.Editor
                 }
                 map.Add(interfaceMember, implementationMember);
             }
+        }
+
+        List<FileStream> LoadMeta(string[] metas)
+        {
+            List<FileStream> list = new List<FileStream>();
+            foreach (var meta in metas)
+            {
+                var stream = new FileStream(meta, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                list.Add(stream);
+            }
+            return list;
         }
 
         private PortableExecutableReference LoadLib(string path)

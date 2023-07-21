@@ -1,4 +1,6 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -6,9 +8,9 @@ using Script.ToLua.Editor.luaAst;
 
 namespace Script.ToLua.Editor
 {
-    public class LuaSyntaxTreeBuilder : CSharpSyntaxVisitor<LuaSyntaxNode>
+    public partial class LuaSyntaxTreeBuilder : CSharpSyntaxVisitor<LuaSyntaxNode>
     {
-        private List<Thunk> _thunks;
+        private Stack<Thunk> _thunks;
         private LuaGenerator _generator;
         private SemanticModel _semanticModel;
         public LuaSyntaxTreeBuilder(LuaGenerator generator, SemanticModel semanticModel) {
@@ -16,23 +18,108 @@ namespace Script.ToLua.Editor
             _semanticModel = semanticModel;
         }
 
-        public void BuildLuaThunk(CompilationUnitSyntax node)
+        public Thunk BuildLuaThunk(CompilationUnitSyntax node)
         {
             Thunk thunk = new Thunk(node.SyntaxTree.FilePath);
-            _thunks.Add(thunk);
+            _thunks.Push(thunk);
             
-            ProcessTrivia(node, node.Members);
+            var commons = Process(node, node.Members);
+            foreach (Statement statement in commons) {
+                if (statement is TypeDeclarationStatement typeDeclaration) {
+                    var namespaceStatement = new FunctionStatement();
+                    namespaceStatement.UpdateIdentifiers("", LuaDefine.IdentifierName.System, LuaDefine.IdentifierName.Namespace, LuaDefine.IdentifierName.Namespace);
+                    namespaceStatement.function.body.AddStatement(statement);
+                    thunk.AddStatement(namespaceStatement);
+                }
+                else {
+                    thunk.AddStatement(statement);
+                }
+            }
+
+            var attributes = ProcessAttributes(node.AttributeLists);
+            _generator.assemblyAttributes.AddRange(attributes);
+            _thunks.Pop();
+
+            return thunk;
         }
-        
+
+        public List<Expression> ProcessAttributes(SyntaxList<AttributeListSyntax> attributeLists) {
+            var expressions = new List<Expression>();
+            var attributes = attributeLists.SelectMany(i => i.Attributes);
+            foreach (AttributeSyntax attribute in attributes) {
+                var expression = (Expression)attribute.Accept(this);
+                if (expression != null) {
+                    expressions.Add(expression);
+                }
+            }
+
+            return expressions;
+        }
+
         // 处理注释
-        void ProcessTrivia(SyntaxNode root, SyntaxList<SyntaxNode> nodes)
+        List<Statement> Process(SyntaxNode root, IEnumerable<CSharpSyntaxNode> nodes, bool processBlank = true)
         {
-            List<SyntaxTrivia> trivias = null;
+            List<SyntaxTrivia> trivias = new List<SyntaxTrivia>();
             foreach (SyntaxTrivia trivia in root.DescendantTrivia())
             {
                 if(IsExportSyntaxTrivia(trivia, root))
                     trivias.Add(trivia);
             }
+
+            List<BlockCommon> triList = new List<BlockCommon>();
+            List<BlockCommon> nodeList = new List<BlockCommon>();
+
+            foreach (var trivia in trivias)
+            {
+                triList.Add(new BlockCommon(trivia));
+            }
+
+            foreach (var syntaxNode in nodes)
+            {
+                nodeList.Add(new BlockCommon(syntaxNode));
+            }
+
+            bool tag = false;
+            foreach (var blockCommon in triList)
+            {
+                if (!nodeList.Any(i => i.Contains(blockCommon)))
+                {
+                    nodeList.Add(blockCommon);
+                    tag = true;
+                }
+            }
+
+            if (tag)
+            {
+                nodeList.Sort();
+            }
+
+            List<Statement> statements = new List<Statement>();
+
+            int lastLine = -1;
+            foreach (var blockCommon in nodeList)
+            {
+                // 是否处理空白行
+                if (processBlank)
+                {
+                    var blankLine = blockCommon.ProcessBlankLine(ref lastLine);
+                    if (blankLine != null)
+                    {
+                        statements.Add(blankLine);
+                    }
+                }
+
+                var blockNode = blockCommon.Visit(this, out var blockStatements);
+                if (blockNode != null) {
+                    statements.Add((Statement)blockNode);
+                }
+
+                if (blockStatements != null) {
+                    statements.AddRange(blockStatements);
+                }
+            }
+            
+            return statements;
         }
         
         public bool IsExportSyntaxTrivia(SyntaxTrivia syntaxTrivia, SyntaxNode rootNode) {
@@ -56,6 +143,22 @@ namespace Script.ToLua.Editor
                 default:
                     return false;
             }
+        }
+
+        public override LuaSyntaxNode VisitNamespaceDeclaration(NamespaceDeclarationSyntax node)
+        {
+            return BuildNamespaceDeclaration(node);
+        }
+
+        public FunctionStatement BuildNamespaceDeclaration(BaseNamespaceDeclarationSyntax node)
+        {
+            var symbol = (INamespaceSymbol)_semanticModel.GetDeclaredSymbol(node);
+            // 检查是否是嵌套空间
+            bool isNested = node.Parent.IsKind(SyntaxKind.NamespaceDeclaration);
+            string name = _generator.GetNamespaceDefineName(symbol, node);
+            var namespaceStatement = new FunctionStatement();
+            namespaceStatement.UpdateIdentifiers(name, isNested ? LuaDefine.IdentifierName.Namespace : LuaDefine.IdentifierName.System, LuaDefine.IdentifierName.Namespace, LuaDefine.IdentifierName.Namespace);
+            var statements = 
         }
     }
 }
