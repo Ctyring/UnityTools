@@ -11,5 +11,10 @@
         {
             return new MemberAccessExpression(this, name, isColon);
         }
+        
+        public static implicit operator Expression(string valueText) {
+            IdentifierNameExpression identifierName = valueText;
+            return identifierName;
+        }
     }
 }

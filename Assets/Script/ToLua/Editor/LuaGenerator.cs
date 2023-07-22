@@ -4,11 +4,11 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using CSharpLua;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Script.ToLua.Editor.luaAst;
-using UnityEditor;
 using UnityEngine;
 
 namespace Script.ToLua.Editor
@@ -24,14 +24,14 @@ namespace Script.ToLua.Editor
         private HashSet<INamedTypeSymbol> _typesOfExtendSelf = new(SymbolEqualityComparer.Default);
         private Dictionary<INamedTypeSymbol, string> _typeRefactorNames = new(SymbolEqualityComparer.Default);
         Dictionary<INamespaceSymbol, string> _namespaceRefactorNames = new(SymbolEqualityComparer.Default);
-        private XmlMetaProvider _metaProvider;
+        public XmlMetaProvider metaProvider;
         private string metas = "";
         public ImmutableList<Expression> assemblyAttributes = ImmutableList<Expression>.Empty;
 
         public void Init()
         {
             BuildCompilation();
-            _metaProvider = new XmlMetaProvider(LoadMeta(LuaTool.Split(metas)));
+            metaProvider = new XmlMetaProvider(LoadMeta(LuaTool.Split(metas)));
         }
         
         public void CreateLua()
@@ -67,7 +67,7 @@ namespace Script.ToLua.Editor
                 return GetNamespaceNames(GetAllNamespaces(symbol));
             }
 
-            return _metaProvider.GetNamespaceMapName(symbol, original);
+            return metaProvider.GetNamespaceMapName(symbol, original);
         }
         
         public static IEnumerable<INamespaceSymbol> InternalGetAllNamespaces(INamespaceSymbol symbol) {

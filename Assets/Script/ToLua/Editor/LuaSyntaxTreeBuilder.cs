@@ -10,9 +10,66 @@ namespace Script.ToLua.Editor
 {
     public partial class LuaSyntaxTreeBuilder : CSharpSyntaxVisitor<LuaSyntaxNode>
     {
-        private Stack<Thunk> _thunks;
+        
         private LuaGenerator _generator;
         private SemanticModel _semanticModel;
+        private int _genericTypeCounter;
+        
+        public bool IsNoneGenericTypeCounter => _genericTypeCounter == 0;
+        public void AddGenericTypeCounter() => ++_genericTypeCounter;
+        public void SubGenericTypeCounter() => --_genericTypeCounter;
+        
+        
+        private Stack<Thunk> _thunks = new Stack<Thunk>();
+        private readonly Stack<TypeDeclarationInfo> _typeDeclarations = new();
+        private readonly Stack<FunctionExpression> _functions = new();
+        private readonly Stack<MethodInfo> _methodInfos = new();
+        private readonly Stack<BlockStatement> _blocks = new();
+        private readonly Stack<LuaIfStatementSyntax> ifStatements_ = new();
+        private readonly Stack<LuaSwitchAdapterStatementSyntax> switches_ = new();
+        
+        private Thunk CurCompilationUnit {
+            get {
+                return _thunks.Peek();
+            }
+        }
+
+        private TypeDeclarationStatement CurType {
+            get {
+                return _typeDeclarations.Peek().TypeDeclaration;
+            }
+        }
+
+        private INamedTypeSymbol CurTypeSymbol {
+            get {
+                return _typeDeclarations.Peek().TypeSymbol;
+            }
+        }
+
+        internal TypeDeclarationInfo CurTypeDeclaration {
+            get {
+                return _thunks.Count > 0 ? _typeDeclarations.Peek() : null;
+            }
+        }
+
+        private FunctionExpression CurFunction {
+            get {
+                return _functions.Peek();
+            }
+        }
+
+        private FunctionExpression CurFunctionOrNull {
+            get {
+                return _functions.Count > 0 ? _functions.Peek() : null;
+            }
+        }
+
+        private MethodInfo CurMethodInfoOrNull {
+            get {
+                return _methodInfos.Count > 0 ? _methodInfos.Peek() : null;
+            }
+        }
+        
         public LuaSyntaxTreeBuilder(LuaGenerator generator, SemanticModel semanticModel) {
             _generator = generator;
             _semanticModel = semanticModel;

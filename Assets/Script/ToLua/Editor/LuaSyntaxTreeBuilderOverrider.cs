@@ -14,7 +14,11 @@ namespace Script.ToLua.Editor {
             var symbol = (IMethodSymbol)_semanticModel.GetSymbolInfo(node).Symbol;
             Expression expression;
             if (symbol != null) {
-                
+                // 查找是否有对象创建的模板
+                string codeTemplate = _generator.metaProvider.GetMethodCodeTemplate(symbol);
+                if (codeTemplate != null) {
+                    
+                }
             }
         }
     }

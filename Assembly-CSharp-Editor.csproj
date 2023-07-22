@@ -91,6 +91,7 @@
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\BlankLineStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\BlockStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\CommentStatement.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\DocumentStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\EmptyStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\ExpressionStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\FunctionStatement.cs" />
@@ -107,10 +108,12 @@
      <Compile Include="Assets\Script\ToLua\Editor\LuaSyntaxTreeBuilderHelper.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\LuaSyntaxTreeBuilderOverrider.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\LuaTool.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\MethodInfo.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\TestCecil.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\LuaSyntaxTreeBuilder.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\CSharpToLuaSyntaxWalker.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\LuaSyntaxNode.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\TypeDeclarationInfo.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\XmlMetaProvider.cs" />
      <Folder Include="Assets\NuGet\Editor" />
      <Folder Include="Assets\Script\Test\Editor" />

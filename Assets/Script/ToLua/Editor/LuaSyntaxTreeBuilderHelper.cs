@@ -1,11 +1,89 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Script.ToLua.Editor.luaAst;
 
 namespace Script.ToLua.Editor {
     public partial class LuaSyntaxTreeBuilder {
+        private static readonly Regex codeTemplateRegex_ = new(@"(,?\s*)\{(\*?[\w|`]+)\}", RegexOptions.Compiled); // 匹配 {xxx} 或 {xxx*} 或 {,xxx} 或 {,xxx*}
+        
+        /// <summary>
+        /// 构建代码模板
+        /// </summary>
+        /// <returns></returns>
+        private Exception BuildCodeTemplate(string codeTemplate, IdentifierNameExpression memberBindingIdentifierName, Exception target) {
+            MatchCollection matches = codeTemplateRegex_.Matches(codeTemplate);
+            List<Expression> codeExceptions = new();
+            int preIdx = 0;
+            // 遍历匹配的结果
+            foreach (Match match in matches) {
+                if (match.Index > preIdx) {
+                    string preToken = codeTemplate[preIdx..match.Index];
+                    if (!string.IsNullOrEmpty(preToken)) {
+                        codeExceptions.Add(preToken);
+                    }
+                    
+                    string comma = match.Groups[1].Value;
+                    string key = match.Groups[2].Value;
+                    switch (key) {
+                        case "this":
+                            var thisExpression = memberBindingIdentifierName ?? (target != null ? memberaccess)
+                    }
+                }
+            }
+        }
+
+        private Expression BuildMemberAccessTargetExpression(ExpressionSyntax targetExpression) {
+            var expression = (Expression)targetExpression.Accept(this);
+            SyntaxKind kind = targetExpression.Kind();
+            if ((kind >= SyntaxKind.NumericLiteralExpression && kind <= SyntaxKind.NullLiteralExpression) ||
+                (expression is ValExpression)) {
+                
+            }
+        }
+        
+        private void ProcessPrevIsInvokeStatement(ExpressionSyntax node) {
+            SyntaxNode current = node;
+            while (true) {
+                var parent = current.Parent;
+                if (parent == null) {
+                    return;
+                }
+
+                switch (parent.Kind()) {
+                    case SyntaxKind.Argument:
+                    case SyntaxKind.LocalDeclarationStatement:
+                    case SyntaxKind.CastExpression: {
+                        return;
+                    }
+
+                    default: {
+                        if (parent is AssignmentExpressionSyntax assignment && assignment.Right == current) {
+                            return;
+                        }
+                        break;
+                    }
+                }
+
+                if (parent.IsKind(SyntaxKind.ExpressionStatement)) {
+                    break;
+                }
+                current = parent;
+            }
+
+            var curBlock = _blocks.Count > 0 ? _blocks.Peek() : null;
+            if (curBlock != null) {
+                var statement = curBlock.statements.FindLast(i => i is not BlankLineStatement && i is not CommentStatement);
+                if (statement != null) {
+                    statement.ForceSemicolon = true;
+                }
+            }
+        }
+
         public ValExpression GetConstExpression(ExpressionSyntax node) {
             var constValue = _semanticModel.GetConstantValue(node);
             if (constValue.HasValue) {
