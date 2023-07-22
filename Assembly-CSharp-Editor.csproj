@@ -85,6 +85,7 @@
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\IdentifierNameExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\InvocationExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\MemberAccessExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ParenthesizedExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\StringExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ValExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\LuaDefine.cs" />

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -10,12 +11,13 @@ using Script.ToLua.Editor.luaAst;
 namespace Script.ToLua.Editor {
     public partial class LuaSyntaxTreeBuilder {
         private static readonly Regex codeTemplateRegex_ = new(@"(,?\s*)\{(\*?[\w|`]+)\}", RegexOptions.Compiled); // 匹配 {xxx} 或 {xxx*} 或 {,xxx} 或 {,xxx*}
-        
+        private int noImportTypeNameCounter_;
+        public bool IsNoImportTypeName => noImportTypeNameCounter_ > 0;
         /// <summary>
         /// 构建代码模板
         /// </summary>
         /// <returns></returns>
-        private Exception BuildCodeTemplate(string codeTemplate, IdentifierNameExpression memberBindingIdentifierName, Exception target) {
+        private Exception BuildCodeTemplate(string codeTemplate, IdentifierNameExpression memberBindingIdentifierName, ExpressionSyntax target) {
             MatchCollection matches = codeTemplateRegex_.Matches(codeTemplate);
             List<Expression> codeExceptions = new();
             int preIdx = 0;
@@ -31,10 +33,104 @@ namespace Script.ToLua.Editor {
                     string key = match.Groups[2].Value;
                     switch (key) {
                         case "this":
-                            var thisExpression = memberBindingIdentifierName ?? (target != null ? memberaccess)
+                            var thisExpression = memberBindingIdentifierName ?? (target != null
+                                ? BuildMemberAccessTargetExpression(target)
+                                : LuaDefine.IdentifierName.This);
+                            if (!string.IsNullOrEmpty(comma)) {
+                                codeExceptions.Add(comma);
+                            }
+                            codeExceptions.Add(thisExpression);
+                            break;
+                        case "class":
+                            var type = _semanticModel.GetTypeInfo(target).Type;
+                            var typeName = _generator.GetType()
                     }
                 }
             }
+        }
+        
+        void ImportGenericTypeName(ref Expression luaExpression, ITypeSymbol symbol) {
+            if (!IsNoImportTypeName && !SymbolEqualityComparer.Default.Equals(CurTypeSymbol, symbol) && !IsCurMethodTypeArgument(symbol)) {
+                var invocationExpression = (LuaInvocationExpressionSyntax)luaExpression;
+                string newName = GetGenericTypeImportName(invocationExpression, out var argumentTypeNames);
+                if (!IsLocalVarExistsInCurMethod(newName)) {
+                    bool success;
+                    if (!symbol.IsTypeParameterExists()) {
+                        success = AddGenericImport(invocationExpression, newName, argumentTypeNames, symbol.IsAbsoluteFromCode());
+                    } else {
+                        success = CurTypeDeclaration.TypeDeclaration.AddGenericImport(invocationExpression, newName, argumentTypeNames, symbol.IsAbsoluteFromCode(), out var declare);
+                        if (declare != null) {
+                            bool hasAdd = generator_.AddGenericImportDepend(CurTypeDeclaration.TypeSymbol, symbol.OriginalDefinition as INamedTypeSymbol);
+                            if (hasAdd && CurCompilationUnit.IsUsingDeclareConflict(invocationExpression)) {
+                                declare.IsFromGlobal = true;
+                                CurTypeDeclaration.TypeDeclaration.AddGlobalParameter();
+                            }
+                        }
+                    }
+                    if (success) {
+                        luaExpression = newName;
+                    }
+                }
+            }
+        }
+        
+        private bool IsCurMethodTypeArgument(ITypeSymbol symbol) {
+            var methodInfo = CurMethodInfoOrNull;
+            if (methodInfo != null) {
+                return IsMethodTypeArgument(methodInfo.Symbol, symbol);
+            }
+            return false;
+        }
+        
+        private static bool IsMethodTypeArgument(IMethodSymbol method, ITypeSymbol symbol) {
+            if (method.TypeArguments.Length > 0) {
+                return method.TypeArguments.Any(i=>IsTypeParameterExists(i));
+            }
+
+            if (method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction) {
+                if (method.ContainingSymbol is IMethodSymbol containingMethod) {
+                    return IsMethodTypeArgument(containingMethod, symbol);
+                }
+            }
+            return false;
+        }
+        
+        public static bool IsTypeParameterExists(ITypeSymbol symbol, ITypeSymbol matchType = null) {
+            switch (symbol.Kind) {
+                case SymbolKind.ArrayType: {
+                    var arrayType = (IArrayTypeSymbol)symbol;
+                    if (IsTypeParameterExists(arrayType.ElementType, matchType)) {
+                        return true;
+                    }
+                    break;
+                }
+                case SymbolKind.NamedType: {
+                    var nameTypeSymbol = (INamedTypeSymbol)symbol;
+                    foreach (var typeArgument in nameTypeSymbol.TypeArguments) {
+                        if (IsTypeParameterExists(typeArgument, matchType)) {
+                            return true;
+                        }
+                    }
+                    if (symbol.ContainingType != null) {
+                        if (IsTypeParameterExists(symbol.ContainingType, matchType)) {
+                            return true;
+                        }
+                    }
+                    break;
+                }
+                case SymbolKind.TypeParameter: {
+                    return matchType == null || SymbolEqualityComparer.Default.Equals(symbol, matchType);
+                }
+                case SymbolKind.PointerType: {
+                    var pointType = (IPointerTypeSymbol)symbol;
+                    if (IsTypeParameterExists(pointType.PointedAtType, matchType)) {
+                        return true;
+                    }
+                    break;
+                }
+            }
+
+            return false;
         }
 
         private Expression BuildMemberAccessTargetExpression(ExpressionSyntax targetExpression) {
@@ -42,8 +138,11 @@ namespace Script.ToLua.Editor {
             SyntaxKind kind = targetExpression.Kind();
             if ((kind >= SyntaxKind.NumericLiteralExpression && kind <= SyntaxKind.NullLiteralExpression) ||
                 (expression is ValExpression)) {
-                
+                ProcessPrevIsInvokeStatement(targetExpression);
+                expression = expression.Parenthesized();
             }
+
+            return expression;
         }
         
         private void ProcessPrevIsInvokeStatement(ExpressionSyntax node) {

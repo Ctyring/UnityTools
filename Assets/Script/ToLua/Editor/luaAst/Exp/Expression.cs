@@ -16,5 +16,9 @@
             IdentifierNameExpression identifierName = valueText;
             return identifierName;
         }
+        
+        public ParenthesizedExpression Parenthesized() {
+            return new(this);
+        }
     }
 }

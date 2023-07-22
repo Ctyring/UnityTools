@@ -14,6 +14,12 @@ namespace Script.ToLua.Editor.luaAst
         {
             this.expression = expression;
         }
+        
+        public InvocationExpression(Expression expression, params Expression[] arguments) : this(expression) {
+            foreach (Expression argument in arguments) {
+                this.arguments.Add(argument);
+            }
+        }
 
         public void AddArgument(Expression argument)
         {
