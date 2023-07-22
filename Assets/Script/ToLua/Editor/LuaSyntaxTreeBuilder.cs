@@ -19,7 +19,6 @@ namespace Script.ToLua.Editor
         public void AddGenericTypeCounter() => ++_genericTypeCounter;
         public void SubGenericTypeCounter() => --_genericTypeCounter;
         
-        
         private Stack<Thunk> _thunks = new Stack<Thunk>();
         private readonly Stack<TypeDeclarationInfo> _typeDeclarations = new();
         private readonly Stack<FunctionExpression> _functions = new();

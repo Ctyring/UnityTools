@@ -2,10 +2,12 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Script.ToLua.Editor.CSharpToLuaHelper;
 using Script.ToLua.Editor.luaAst;
 
 namespace Script.ToLua.Editor {
@@ -49,10 +51,16 @@ namespace Script.ToLua.Editor {
             }
         }
         
-        void ImportGenericTypeName(ref Expression luaExpression, ITypeSymbol symbol) {
+        /// <summary>
+        /// 导入泛型类型名
+        /// </summary>
+        /// <param name="luaExpression"></param>
+        /// <param name="symbol"></param>
+        public void ImportGenericTypeName(ref Expression luaExpression, ITypeSymbol symbol) {
             if (!IsNoImportTypeName && !SymbolEqualityComparer.Default.Equals(CurTypeSymbol, symbol) && !IsCurMethodTypeArgument(symbol)) {
-                var invocationExpression = (LuaInvocationExpressionSyntax)luaExpression;
+                var invocationExpression = (InvocationExpression)luaExpression;
                 string newName = GetGenericTypeImportName(invocationExpression, out var argumentTypeNames);
+                // 判断是否是本地变量
                 if (!IsLocalVarExistsInCurMethod(newName)) {
                     bool success;
                     if (!symbol.IsTypeParameterExists()) {
@@ -72,6 +80,70 @@ namespace Script.ToLua.Editor {
                     }
                 }
             }
+        }
+        
+        /// <summary>
+        /// 判断是否是当前方法的本地变量
+        /// </summary>
+        /// <param name="name"></param>
+        /// <returns></returns>
+        private bool IsLocalVarExistsInCurMethod(string name) {
+            var methodInfo = CurMethodInfoOrNull;
+            if (methodInfo != null) {
+                var root = GetDeclaringSyntaxNode(methodInfo.Symbol);
+                if (IsLocalVarExists(name, root)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        private static bool IsLocalVarExists(string name, SyntaxNode root) {
+            var searcher = new LocalValueWalker(name);
+            return searcher.Find(root);
+        }
+        
+        public static SyntaxNode GetDeclaringSyntaxNode(ISymbol symbol) {
+            return symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+        }
+        
+        private static string GetGenericTypeImportName(InvocationExpression invocationExpression, out List<string> argumentTypeNames) {
+            StringBuilder sb = new StringBuilder();
+            argumentTypeNames = new List<string>();
+            FillGenericTypeImportName(sb, argumentTypeNames, invocationExpression);
+            return sb.ToString();
+        }
+        
+        static string CheckLastName(string lastName) {
+            return lastName == "Dictionary" ? "Dict" : lastName;
+        }
+        
+        /// <summary>
+        /// 获取需要填充泛型的类型名
+        /// </summary>
+        /// <param name="sb"></param>
+        /// <param name="argumentTypeNames"></param>
+        /// <param name="invocationExpression"></param>
+        private static void FillGenericTypeImportName(StringBuilder sb, List<string> argumentTypeNames, InvocationExpression invocationExpression) {
+            var identifierName = (IdentifierNameExpression)invocationExpression.expression;
+            sb.Append(CheckLastName(LastName(identifierName.name)));
+            foreach (var argument in invocationExpression.arguments) {
+                if (argument is IdentifierNameExpression typeName) {
+                    string argumentTypeName = typeName.name;
+                    sb.Append(CheckLastName(LastName(argumentTypeName)));
+                    argumentTypeNames.Add(argumentTypeName);
+                } else {
+                    FillGenericTypeImportName(sb, argumentTypeNames, (InvocationExpression)argument);
+                }
+            }
+        }
+        
+        public static string LastName(string s) {
+            int pos = s.LastIndexOf('.');
+            if (pos != -1) {
+                return s[(pos + 1)..];
+            }
+            return s;
         }
         
         private bool IsCurMethodTypeArgument(ITypeSymbol symbol) {

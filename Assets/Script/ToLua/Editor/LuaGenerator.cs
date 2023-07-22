@@ -114,11 +114,14 @@ namespace Script.ToLua.Editor {
                 case SymbolKind.TypeParameter: {
                     return symbol.Name;
                 }
+                // 数组类型
                 case SymbolKind.ArrayType: {
                     var arrayType = (IArrayTypeSymbol)symbol;
                     transform?.AddGenericTypeCounter();
+                    // 获取数组元素类型
                     var elementType = GetTypeName(arrayType.ElementType, transform);
                     transform?.SubGenericTypeCounter();
+                    // 包装成调用表达式
                     var invocation = new InvocationExpression(LuaDefine.IdentifierName.Array, elementType);
                     if (arrayType.Rank > 1) {
                         invocation.AddArgument(arrayType.Rank.ToString());
