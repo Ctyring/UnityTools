@@ -4,5 +4,9 @@
         public IdentifierExpression(string value) : base(value, new IdentifierNameExpression(value)) {
             identifierName = new IdentifierNameExpression(value);
         }
+        
+        public static implicit operator IdentifierExpression(string valueText) {
+            return new(valueText);
+        }
     }
 }

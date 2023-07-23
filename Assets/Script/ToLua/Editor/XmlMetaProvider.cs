@@ -495,7 +495,12 @@ namespace CSharpLua {
             return null;
         }
 
-        internal bool MayHaveCodeMeta(ISymbol symbol) {
+        /// <summary>
+        /// 判断是否可能有元数据
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        bool MayHaveCodeMeta(ISymbol symbol) {
             return symbol.DeclaredAccessibility == Accessibility.Public && symbol.DeclaringSyntaxReferences.IsEmpty;
         }
 
@@ -527,7 +532,7 @@ namespace CSharpLua {
             return sb.ToString();
         }
         
-        private static void FillExternalTypeName(
+        public static void FillExternalTypeName(
             StringBuilder sb,
             INamedTypeSymbol typeSymbol,
             Func<INamespaceSymbol, string, string> funcOfNamespace,
@@ -576,7 +581,14 @@ namespace CSharpLua {
             }
         }
 
-        internal string GetTypeMapName(ISymbol symbol, string shortName) {
+        /// <summary>
+        /// 从xml中查找typename
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="shortName"></param>
+        /// <returns></returns>
+        public string GetTypeMapName(ISymbol symbol, string shortName) {
+            // 如果可能有元数据，就去查找
             if (MayHaveCodeMeta(symbol)) {
                 var info = GetTypeMetaInfo(symbol, shortName);
                 return info?.Model.Name;
@@ -585,7 +597,7 @@ namespace CSharpLua {
             return null;
         }
 
-        internal bool IsTypeIgnoreGeneric(INamedTypeSymbol typeSymbol) {
+        public bool IsTypeIgnoreGeneric(INamedTypeSymbol typeSymbol) {
             if (MayHaveCodeMeta(typeSymbol)) {
                 var info = GetTypeMetaInfo(typeSymbol);
                 return info != null && info.Model.IgnoreGeneric;

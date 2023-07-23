@@ -12,6 +12,12 @@ namespace Script.ToLua.Editor {
             TypeDeclaration = luaTypeDeclarationSyntax;
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="getNameTypeSymbol"></param>
+        /// <param name="name"></param>
+        /// <returns></returns>
         public bool CheckTypeName(INamedTypeSymbol getNameTypeSymbol, out IdentifierNameExpression name) {
             if (SymbolEqualityComparer.Default.Equals(getNameTypeSymbol, TypeSymbol)) {
                 TypeDeclaration.IsClassUsed = true;

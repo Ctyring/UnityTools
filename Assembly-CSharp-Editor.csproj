@@ -99,6 +99,7 @@
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\MemberAccessExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\BlockStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\DocumentStatement.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\SettingInfo.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\TestCecil.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\BlockCommon.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\LocalVariableDeclaratorStatement.cs" />

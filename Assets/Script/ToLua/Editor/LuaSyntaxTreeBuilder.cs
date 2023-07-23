@@ -26,6 +26,8 @@ namespace Script.ToLua.Editor
         private readonly Stack<BlockStatement> _blocks = new();
         private readonly Stack<LuaIfStatementSyntax> ifStatements_ = new();
         private readonly Stack<LuaSwitchAdapterStatementSyntax> switches_ = new();
+        private int _metadataTypeNameCounter;
+        public bool IsMetadataTypeName => _metadataTypeNameCounter > 0;
         
         private Thunk CurrentThunk {
             get {

@@ -6,6 +6,7 @@ using System.Diagnostics.Contracts;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using CSharpLua;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -13,8 +14,10 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Script.ToLua.Editor.luaAst;
 using UnityEngine;
 
-namespace Script.ToLua.Editor {
-    public class LuaGenerator {
+namespace Script.ToLua.Editor
+{
+    public class LuaGenerator
+    {
         CSharpCompilation _compilation; // 编译器
         private List<INamedTypeSymbol> _types; // 类型名
 
@@ -35,30 +38,42 @@ namespace Script.ToLua.Editor {
         public XmlMetaProvider metaProvider;
         private string metas = "";
         public ImmutableList<Expression> assemblyAttributes = ImmutableList<Expression>.Empty;
-        private ConcurrentDictionary<INamedTypeSymbol, LuaTool.ConcurrentHashSet<INamedTypeSymbol>> _genericImportDepends = new(SymbolEqualityComparer.Default);
 
-        
-        public void Init() {
+        private ConcurrentDictionary<INamedTypeSymbol, LuaTool.ConcurrentHashSet<INamedTypeSymbol>>
+            _genericImportDepends = new(SymbolEqualityComparer.Default);
+
+        LuaTool.ConcurrentHashSet<string> _exportEnums = new();
+        LuaTool.ConcurrentHashSet<ITypeSymbol> _ignoreExportTypes = new(SymbolEqualityComparer.Default);
+
+        public SettingInfo Setting { get; set; }
+
+        public void Init()
+        {
             BuildCompilation();
             metaProvider = new XmlMetaProvider(LoadMeta(LuaTool.Split(metas)));
         }
 
-        public void CreateLua() {
-            foreach (SyntaxTree tree in _compilation.SyntaxTrees) {
+        public void CreateLua()
+        {
+            foreach (SyntaxTree tree in _compilation.SyntaxTrees)
+            {
                 CreateLuaCompilationUnitSyntax(tree);
             }
         }
 
-        Thunk CreateLuaCompilationUnitSyntax(SyntaxTree tree) {
+        Thunk CreateLuaCompilationUnitSyntax(SyntaxTree tree)
+        {
             var semanticModel = _compilation.GetSemanticModel(tree);
-            var syntax = (CompilationUnitSyntax)tree.GetRoot();
+            var syntax = (CompilationUnitSyntax) tree.GetRoot();
             LuaSyntaxTreeBuilder builder = new LuaSyntaxTreeBuilder(this, semanticModel);
             return builder.BuildLuaThunk(syntax);
         }
 
-        private string GetNamespaceNames(List<INamespaceSymbol> symbols) {
+        private string GetNamespaceNames(List<INamespaceSymbol> symbols)
+        {
             List<string> names = new List<string>();
-            foreach (INamespaceSymbol symbol in symbols) {
+            foreach (INamespaceSymbol symbol in symbols)
+            {
                 string name = symbol.Name;
                 if (_namespaceRefactorNames.TryGetValue(symbol, out string refactorName))
                     name = refactorName;
@@ -68,44 +83,54 @@ namespace Script.ToLua.Editor {
             return string.Join(".", names);
         }
 
-        private string GetNamespaceMapName(INamespaceSymbol symbol, string original) {
-            if (!symbol.DeclaringSyntaxReferences.IsEmpty) {
+        private string GetNamespaceMapName(INamespaceSymbol symbol, string original)
+        {
+            if (!symbol.DeclaringSyntaxReferences.IsEmpty)
+            {
                 return GetNamespaceNames(GetAllNamespaces(symbol));
             }
 
             return metaProvider.GetNamespaceMapName(symbol, original);
         }
 
-        public static IEnumerable<INamespaceSymbol> InternalGetAllNamespaces(INamespaceSymbol symbol) {
-            do {
+        public static IEnumerable<INamespaceSymbol> InternalGetAllNamespaces(INamespaceSymbol symbol)
+        {
+            do
+            {
                 yield return symbol;
                 symbol = symbol.ContainingNamespace;
             } while (!symbol.IsGlobalNamespace);
         }
 
-        public static List<INamespaceSymbol> GetAllNamespaces(INamespaceSymbol symbol) {
-            if (symbol.IsGlobalNamespace) {
+        public static List<INamespaceSymbol> GetAllNamespaces(INamespaceSymbol symbol)
+        {
+            if (symbol.IsGlobalNamespace)
+            {
                 return new List<INamespaceSymbol>();
             }
 
             return InternalGetAllNamespaces(symbol).Reverse().ToList();
         }
 
-        public string GetNamespaceDefineName(INamespaceSymbol symbol, BaseNamespaceDeclarationSyntax node) {
+        public string GetNamespaceDefineName(INamespaceSymbol symbol, BaseNamespaceDeclarationSyntax node)
+        {
             string original = node.Name.ToString();
-            if (original == symbol.Name) {
+            if (original == symbol.Name)
+            {
                 return _namespaceRefactorNames.GetValueOrDefault(symbol, original);
             }
 
-            var namespaces = new List<INamespaceSymbol>() { symbol };
-            do {
+            var namespaces = new List<INamespaceSymbol>() {symbol};
+            do
+            {
                 // 递归获取命名空间
                 symbol = symbol.ContainingNamespace;
                 namespaces.Add(symbol);
                 List<INamespaceSymbol> symbols = namespaces;
                 symbols.Reverse();
                 string symbolsName = string.Join(".", symbols.Select(i => i.Name));
-                if (symbolsName == original) {
+                if (symbolsName == original)
+                {
                     return GetNamespaceNames(symbols);
                 }
             } while (!symbol.IsGlobalNamespace);
@@ -113,21 +138,26 @@ namespace Script.ToLua.Editor {
             throw new InvalidOperationException();
         }
 
-        Expression GetTypeName(ISymbol symbol, LuaSyntaxTreeBuilder transform = null) {
-            switch (symbol.Kind) {
-                case SymbolKind.TypeParameter: {
+        public Expression GetTypeName(ISymbol symbol, LuaSyntaxTreeBuilder transform = null)
+        {
+            switch (symbol.Kind)
+            {
+                case SymbolKind.TypeParameter:
+                {
                     return symbol.Name;
                 }
                 // 数组类型
-                case SymbolKind.ArrayType: {
-                    var arrayType = (IArrayTypeSymbol)symbol;
+                case SymbolKind.ArrayType:
+                {
+                    var arrayType = (IArrayTypeSymbol) symbol;
                     transform?.AddGenericTypeCounter();
                     // 获取数组元素类型
                     var elementType = GetTypeName(arrayType.ElementType, transform);
                     transform?.SubGenericTypeCounter();
                     // 包装成调用表达式
                     var invocation = new InvocationExpression(LuaDefine.IdentifierName.Array, elementType);
-                    if (arrayType.Rank > 1) {
+                    if (arrayType.Rank > 1)
+                    {
                         invocation.AddArgument(arrayType.Rank.ToString());
                     }
 
@@ -135,70 +165,95 @@ namespace Script.ToLua.Editor {
                     transform?.ImportGenericTypeName(ref luaExpression, arrayType);
                     return luaExpression;
                 }
-                case SymbolKind.PointerType: {
-                    var pointType = (IPointerTypeSymbol)symbol;
+                // 指针
+                case SymbolKind.PointerType:
+                {
+                    var pointType = (IPointerTypeSymbol) symbol;
+                    // 获取指针指向的类型
                     var elementTypeExpression = GetTypeName(pointType.PointedAtType, transform);
-                    LuaExpressionSyntax luaExpression =
-                        new LuaInvocationExpressionSyntax(LuaIdentifierNameSyntax.Array, elementTypeExpression);
+                    Expression luaExpression =
+                        new InvocationExpression(LuaDefine.IdentifierName.Array, elementTypeExpression);
                     transform?.ImportGenericTypeName(ref luaExpression, pointType);
                     return luaExpression;
                 }
-                case SymbolKind.DynamicType: {
-                    return LuaIdentifierNameSyntax.Object;
+                // dynamic
+                case SymbolKind.DynamicType:
+                {
+                    return LuaDefine.IdentifierName.Object;
                 }
             }
 
-            var namedTypeSymbol = (INamedTypeSymbol)symbol;
-            if (IsConstantEnum(namedTypeSymbol)) {
+            // 枚举
+            var namedTypeSymbol = (INamedTypeSymbol) symbol;
+            if (IsConstantEnum(namedTypeSymbol))
+            {
                 return GetTypeName(namedTypeSymbol.EnumUnderlyingType, transform);
             }
 
-            if (namedTypeSymbol.IsDelegateType()) {
-                if (transform?.IsMetadataTypeName == true) {
+            // 委托
+            if (namedTypeSymbol.TypeKind == TypeKind.Delegate)
+            {
+                // 判断是否来自元数据
+                if (transform?.IsMetadataTypeName == true)
+                {
                     var delegateMethod = namedTypeSymbol.DelegateInvokeMethod;
                     Contract.Assert(delegateMethod != null);
-                    if (!delegateMethod.Parameters.IsEmpty || !delegateMethod.ReturnsVoid) {
+                    // 判断该委托有参数或者返回值
+                    if (!delegateMethod.Parameters.IsEmpty || !delegateMethod.ReturnsVoid)
+                    {
                         var arguments = delegateMethod.Parameters.Select(i => GetTypeName(i.Type, transform)).ToList();
                         var argument = delegateMethod.ReturnsVoid
-                            ? LuaIdentifierNameSyntax.SystemVoid
+                            ? LuaDefine.IdentifierName.SystemVoid
                             : GetTypeName(delegateMethod.ReturnType, transform);
                         arguments.Add(argument);
-                        return new LuaInvocationExpressionSyntax(LuaIdentifierNameSyntax.Delegate, arguments);
+                        return new InvocationExpression(LuaDefine.IdentifierName.Delegate, arguments.ToArray());
                     }
                 }
 
-                return LuaIdentifierNameSyntax.Delegate;
+                return LuaDefine.IdentifierName.Delegate;
             }
 
-            if (namedTypeSymbol.IsAnonymousType) {
-                return LuaIdentifierNameSyntax.AnonymousType;
+            // 匿名类型
+            if (namedTypeSymbol.IsAnonymousType)
+            {
+                return LuaDefine.IdentifierName.AnonymousType;
             }
 
-            if (namedTypeSymbol.IsTupleType) {
-                return LuaIdentifierNameSyntax.ValueTuple;
+            // 值元组类型
+            if (namedTypeSymbol.IsTupleType)
+            {
+                return LuaDefine.IdentifierName.ValueTuple;
             }
 
-            if (namedTypeSymbol.IsSystemTuple()) {
-                return LuaIdentifierNameSyntax.Tuple;
+            // 元组
+            if (namedTypeSymbol.Name == "Tuple" && namedTypeSymbol.ContainingNamespace.Name == "System")
+            {
+                return LuaDefine.IdentifierName.Tuple;
             }
 
-            if (transform?.IsNoneGenericTypeCounter == true) {
+            // 如果不是容器内的泛型类型，判断是否是当前声明的class类型
+            if (transform?.IsNoneGenericTypeCounter == true)
+            {
                 var curTypeDeclaration = transform.CurTypeDeclaration;
                 if (curTypeDeclaration != null &&
-                    curTypeDeclaration.CheckTypeName(namedTypeSymbol, out var classIdentifier)) {
+                    curTypeDeclaration.CheckTypeName(namedTypeSymbol, out var classIdentifier))
+                {
                     return classIdentifier;
                 }
             }
 
             var typeName = GetTypeShortName(namedTypeSymbol, transform);
             var typeArguments = GetTypeArguments(namedTypeSymbol, transform);
+            // 如果没有参数，直接返回
             if (typeArguments.Count == 0) {
                 return typeName;
             }
 
             {
-                if (XmlMetaProvider.IsTypeIgnoreGeneric(namedTypeSymbol)) {
-                    string name = typeName.ValueText;
+        
+                // 如果忽略泛型，直接返回name的最后一段
+                if (metaProvider.IsTypeIgnoreGeneric(namedTypeSymbol)) {
+                    string name = typeName.value;
                     int genericTokenPos = name.LastIndexOf('_');
                     if (genericTokenPos != -1) {
                         return name[..genericTokenPos];
@@ -206,35 +261,187 @@ namespace Script.ToLua.Editor {
 
                     return typeName;
                 }
-
-                var invocationExpression = new LuaInvocationExpressionSyntax(typeName);
-                invocationExpression.AddArguments(typeArguments);
-                LuaExpressionSyntax luaExpression = invocationExpression;
+                // 构建声明语句
+                var invocationExpression = new InvocationExpression(typeName);
+                foreach (Expression argument in typeArguments)
+                {
+                    invocationExpression.arguments.Add(argument);
+                }
+                Expression luaExpression = invocationExpression;
                 transform?.ImportGenericTypeName(ref luaExpression, namedTypeSymbol);
                 return luaExpression;
             }
         }
+
+        /// <summary>
+        /// 获取全部参数类型
+        /// </summary>
+        /// <param name="typeSymbol"></param>
+        /// <param name="transform"></param>
+        /// <returns></returns>
+        private List<Expression> GetTypeArguments(INamedTypeSymbol typeSymbol, LuaSyntaxTreeBuilder transform) {
+            List<Expression> typeArguments = new List<Expression>();
+            FillExternalTypeArgument(typeArguments, typeSymbol, transform);
+            FillTypeArguments(typeArguments, typeSymbol, transform);
+            return typeArguments;
+        }
+
+        /// <summary>
+        /// 填充外部参数类型
+        /// </summary>
+        /// <param name="typeArguments"></param>
+        /// <param name="typeSymbol"></param>
+        /// <param name="transform"></param>
+        private void FillExternalTypeArgument(List<Expression> typeArguments, INamedTypeSymbol typeSymbol, LuaSyntaxTreeBuilder transform) {
+            var externalType = typeSymbol.ContainingType;
+            if (externalType != null) {
+                FillExternalTypeArgument(typeArguments, externalType, transform);
+                FillTypeArguments(typeArguments, externalType, transform);
+            }
+        }
+
+        /// <summary>
+        /// 填充参数类型
+        /// </summary>
+        /// <param name="typeArguments"></param>
+        /// <param name="typeSymbol"></param>
+        /// <param name="transform"></param>
+        private void FillTypeArguments(List<Expression> typeArguments, INamedTypeSymbol typeSymbol, LuaSyntaxTreeBuilder transform) {
+            if (typeSymbol.TypeArguments.Length > 0) {
+                transform?.AddGenericTypeCounter();
+                foreach (var typeArgument in typeSymbol.TypeArguments) {
+                    if (typeArgument.Kind == SymbolKind.ErrorType) {
+                        break;
+                    }
+                    var typeArgumentExpression = GetTypeName(typeArgument, transform);
+                    typeArguments.Add(typeArgumentExpression);
+                }
+                transform?.SubGenericTypeCounter();
+            }
+        }
+
+        /// <summary>
+        /// 获取typename
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="transform"></param>
+        /// <returns></returns>
+        public IdentifierExpression GetTypeShortName(ISymbol symbol, LuaSyntaxTreeBuilder transform = null)
+        {
+            var typeSymbol = (INamedTypeSymbol) symbol.OriginalDefinition;
+            string name = XmlMetaProvider.GetTypeShortName(typeSymbol, GetNamespaceMapName, GetTypeRefactorName, transform);
+            string newName = metaProvider.GetTypeMapName(typeSymbol, name);
+            // 如果xml中有，直接用xml的
+            if (newName != null)
+            {
+                name = newName;
+            }
+
+            if (transform != null)
+            {
+                // 如果不会被导入
+                if (transform.IsNoImportTypeName)
+                {
+                    // 判断如果开头不是system或者class，加上global
+                    if (!name.StartsWith(LuaDefine.IdentifierName.System.name) &&
+                        !name.StartsWith(LuaDefine.IdentifierName.Class.name))
+                    {
+                        name = LuaDefine.IdentifierName.Global.name + '.' + name;
+                    }
+                }
+                else
+                {
+                    //如果会被导入，需要做typename检查
+                    transform.ImportTypeName(ref name, (INamedTypeSymbol) symbol);
+                }
+            }
+
+            return name;
+        }
         
+        private string GetTypeRefactorName(INamedTypeSymbol symbol) {
+            if (_typeRefactorNames.TryGetValue(symbol, out var value))
+            {
+                return value;
+            }
+            return default;
+        }
+
+        /// <summary>
+        /// 判断是否是常量枚举
+        /// </summary>
+        /// <param name="enumType"></param>
+        /// <returns></returns>
+        bool IsConstantEnum(ITypeSymbol enumType)
+        {
+            if (enumType.TypeKind == TypeKind.Enum)
+            {
+                // 如果是常量并且不要求导出，就不导出。
+                bool isNot = Setting.IsNotConstantForEnum && IsTypeEnableExport(enumType);
+                return !isNot;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 判断是否要导出类型
+        /// </summary>
+        /// <param name="type"></param>
+        /// <returns></returns>
+        bool IsTypeEnableExport(ITypeSymbol type)
+        {
+            bool isExport = true;
+            if (type.TypeKind == TypeKind.Enum)
+            {
+                isExport = IsEnumExport(type.ToString());
+            }
+
+            if (_ignoreExportTypes.Contains(type))
+            {
+                isExport = false;
+            }
+
+            return isExport;
+        }
+
+        /// <summary>
+        /// 判断是否要以枚举方式导出
+        /// </summary>
+        /// <param name="enumTypeSymbol"></param>
+        /// <returns></returns>
+        bool IsEnumExport(string enumTypeSymbol)
+        {
+            return Setting.IsExportEnumAll || _exportEnums.Contains(enumTypeSymbol);
+        }
+
         /// <summary>
         /// 添加泛型导入依赖
         /// </summary>
         /// <param name="definition"></param>
         /// <param name="type"></param>
         /// <returns></returns>
-        public bool AddGenericImportDepend(INamedTypeSymbol definition, INamedTypeSymbol type) {
+        public bool AddGenericImportDepend(INamedTypeSymbol definition, INamedTypeSymbol type)
+        {
             // 确保type不被重复添加
-            if (type != null && !type.DeclaringSyntaxReferences.IsEmpty && !LuaTool.IsContainsType(definition, type) && !LuaTool.IsDependExists(type, definition)) {
-                var set = _genericImportDepends.GetOrAdd(definition, _ => new LuaTool.ConcurrentHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default));
+            if (type != null && !type.DeclaringSyntaxReferences.IsEmpty && !LuaTool.IsContainsType(definition, type) &&
+                !LuaTool.IsDependExists(type, definition))
+            {
+                var set = _genericImportDepends.GetOrAdd(definition,
+                    _ => new LuaTool.ConcurrentHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default));
                 return set.Add(type);
             }
+
             return false;
         }
 
-        public void BuildCompilation() {
+        public void BuildCompilation()
+        {
             List<string> codes = new List<string>();
             List<string> fileName = new List<string>();
             fileName.Add("Assets/Script/ToLua/Editor/HelloWorld.cs");
-            foreach (var file in fileName) {
+            foreach (var file in fileName)
+            {
                 codes.Add(File.ReadAllText(file));
             }
 
@@ -242,16 +449,18 @@ namespace Script.ToLua.Editor {
             string[] cscArguments = null;
             var libs = GetAllLibs(new List<string>());
             var commandLineArguments = CSharpCommandLineParser.Default.Parse(
-                (cscArguments ?? Array.Empty<string>()).Concat(new[] { "-define:__CSharpLua__" }), null, null);
+                (cscArguments ?? Array.Empty<string>()).Concat(new[] {"-define:__CSharpLua__"}), null, null);
             var parseOptions = commandLineArguments.ParseOptions.WithLanguageVersion(LanguageVersion.Preview)
                 .WithDocumentationMode(DocumentationMode.Parse);
             List<SyntaxTree> trees = new List<SyntaxTree>();
-            foreach (var c in codes) {
+            foreach (var c in codes)
+            {
                 trees.Add(CSharpSyntaxTree.ParseText(c, parseOptions, path));
             }
 
             List<PortableExecutableReference> loadedLib = new List<PortableExecutableReference>();
-            foreach (var lib in libs) {
+            foreach (var lib in libs)
+            {
                 loadedLib.Add(LoadLib(lib));
             }
 
@@ -259,15 +468,19 @@ namespace Script.ToLua.Editor {
             new CSharpToLuaSyntaxWalker(this);
         }
 
-        public void AddImplicitInterfaceImplementation(ISymbol implementationMember, ISymbol interfaceMember) {
-            if (!_implicitInterfaceImplementations.ContainsKey(implementationMember)) {
+        public void AddImplicitInterfaceImplementation(ISymbol implementationMember, ISymbol interfaceMember)
+        {
+            if (!_implicitInterfaceImplementations.ContainsKey(implementationMember))
+            {
                 _implicitInterfaceImplementations.Add(implementationMember, new HashSet<ISymbol>());
             }
 
-            if (_implicitInterfaceImplementations[implementationMember].Add(interfaceMember)) {
+            if (_implicitInterfaceImplementations[implementationMember].Add(interfaceMember))
+            {
                 var containingType = implementationMember.ContainingType;
                 Dictionary<ISymbol, ISymbol> map = default;
-                if (map == null) {
+                if (map == null)
+                {
                     map = new Dictionary<ISymbol, ISymbol>(SymbolEqualityComparer.Default);
                     _implicitInterfaceTypes.Add(containingType, map);
                 }
@@ -276,9 +489,11 @@ namespace Script.ToLua.Editor {
             }
         }
 
-        List<FileStream> LoadMeta(string[] metas) {
+        List<FileStream> LoadMeta(string[] metas)
+        {
             List<FileStream> list = new List<FileStream>();
-            foreach (var meta in metas) {
+            foreach (var meta in metas)
+            {
                 var stream = new FileStream(meta, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 list.Add(stream);
             }
@@ -286,21 +501,26 @@ namespace Script.ToLua.Editor {
             return list;
         }
 
-        private PortableExecutableReference LoadLib(string path) {
+        private PortableExecutableReference LoadLib(string path)
+        {
             Stream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             return MetadataReference.CreateFromStream(stream);
         }
 
-        List<string> GetAllLibs(List<string> libs) {
+        List<string> GetAllLibs(List<string> libs)
+        {
             var allLibs = GetSystemLibs();
             // 遍历libs
-            foreach (string lib in libs) {
+            foreach (string lib in libs)
+            {
                 var path = lib;
-                if (!path.EndsWith(".dll")) {
+                if (!path.EndsWith(".dll"))
+                {
                     path += ".dll";
                 }
 
-                if (!File.Exists(path)) {
+                if (!File.Exists(path))
+                {
                     Debug.Log("不存在的dll文件：" + path);
                     continue;
                 }
@@ -311,11 +531,13 @@ namespace Script.ToLua.Editor {
             return allLibs;
         }
 
-        List<string> GetSystemLibs() {
+        List<string> GetSystemLibs()
+        {
             var systemLibs = new List<string>();
             var systemPath = Path.GetDirectoryName(typeof(object).Assembly.Location);
             var systemDlls = Directory.GetFiles(systemPath, "*.dll");
-            foreach (var systemDll in systemDlls) {
+            foreach (var systemDll in systemDlls)
+            {
                 if (IsCorrectSystemDll(systemDll))
                     systemLibs.Add(systemDll);
             }
@@ -323,54 +545,68 @@ namespace Script.ToLua.Editor {
             return systemLibs;
         }
 
-        private static bool IsCorrectSystemDll(string path) {
-            try {
+        private static bool IsCorrectSystemDll(string path)
+        {
+            try
+            {
                 Assembly.LoadFile(path);
                 return true;
             }
-            catch (Exception) {
+            catch (Exception)
+            {
                 return false;
             }
         }
 
-        public CSharpCompilation GetCompilation() {
+        public CSharpCompilation GetCompilation()
+        {
             return _compilation;
         }
 
-        public void AddType(INamedTypeSymbol typeSymbol) {
+        public void AddType(INamedTypeSymbol typeSymbol)
+        {
             _types.Add(typeSymbol);
             ProcessInherit(typeSymbol);
         }
 
         // 处理继承关系
-        void ProcessInherit(INamedTypeSymbol typeSymbol) {
-            if (typeSymbol.SpecialType != SpecialType.System_Object) {
-                if (typeSymbol.BaseType != null) {
+        void ProcessInherit(INamedTypeSymbol typeSymbol)
+        {
+            if (typeSymbol.SpecialType != SpecialType.System_Object)
+            {
+                if (typeSymbol.BaseType != null)
+                {
                     TryAddExtendSymbol(typeSymbol, typeSymbol);
                 }
             }
 
             // AllInterfaces 包含所有接口，包括间接接口
-            foreach (var interfaceType in typeSymbol.AllInterfaces) {
+            foreach (var interfaceType in typeSymbol.AllInterfaces)
+            {
                 TryAddExtendSymbol(interfaceType, typeSymbol);
             }
         }
 
-        public void TryAddExtendSymbol(INamedTypeSymbol typeSymbol, INamedTypeSymbol child, bool isImplicit = false) {
-            if (!typeSymbol.DeclaringSyntaxReferences.IsEmpty) {
+        public void TryAddExtendSymbol(INamedTypeSymbol typeSymbol, INamedTypeSymbol child, bool isImplicit = false)
+        {
+            if (!typeSymbol.DeclaringSyntaxReferences.IsEmpty)
+            {
                 // 处理泛型
-                if (typeSymbol.IsGenericType) {
+                if (typeSymbol.IsGenericType)
+                {
                     typeSymbol = typeSymbol.OriginalDefinition;
                 }
 
-                if (isImplicit) {
+                if (isImplicit)
+                {
                     if (!_implicitExtends.ContainsKey(typeSymbol))
                         _implicitExtends.Add(typeSymbol, new HashSet<INamedTypeSymbol>());
                     _implicitExtends[typeSymbol].Add(child);
                     return;
                 }
 
-                if (!_typeDependence.ContainsKey(typeSymbol)) {
+                if (!_typeDependence.ContainsKey(typeSymbol))
+                {
                     _typeDependence.Add(typeSymbol, new HashSet<INamedTypeSymbol>());
                 }
 
@@ -378,15 +614,18 @@ namespace Script.ToLua.Editor {
             }
         }
 
-        public void AddTypesOfExtendSelf(INamedTypeSymbol symbol) {
+        public void AddTypesOfExtendSelf(INamedTypeSymbol symbol)
+        {
             _typesOfExtendSelf.Add(symbol);
         }
 
-        public void AddTypeRefactorNames(INamedTypeSymbol symbol, string name) {
+        public void AddTypeRefactorNames(INamedTypeSymbol symbol, string name)
+        {
             _typeRefactorNames.Add(symbol, name);
         }
 
-        public void AddNamespaceRefactorNames(INamespaceSymbol symbol, string name) {
+        public void AddNamespaceRefactorNames(INamespaceSymbol symbol, string name)
+        {
             _namespaceRefactorNames.Add(symbol, name);
         }
     }

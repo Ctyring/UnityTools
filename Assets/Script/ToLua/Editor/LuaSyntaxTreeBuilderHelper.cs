@@ -21,14 +21,14 @@ namespace Script.ToLua.Editor {
         /// <returns></returns>
         private Exception BuildCodeTemplate(string codeTemplate, IdentifierNameExpression memberBindingIdentifierName, ExpressionSyntax target) {
             MatchCollection matches = codeTemplateRegex_.Matches(codeTemplate);
-            List<Expression> codeExceptions = new();
+            List<Expression> codeExpressions = new();
             int preIdx = 0;
             // 遍历匹配的结果
             foreach (Match match in matches) {
                 if (match.Index > preIdx) {
                     string preToken = codeTemplate[preIdx..match.Index];
                     if (!string.IsNullOrEmpty(preToken)) {
-                        codeExceptions.Add(preToken);
+                        codeExpressions.Add(preToken);
                     }
                     
                     string comma = match.Groups[1].Value;
@@ -38,17 +38,124 @@ namespace Script.ToLua.Editor {
                             var thisExpression = memberBindingIdentifierName ?? (target != null
                                 ? BuildMemberAccessTargetExpression(target)
                                 : LuaDefine.IdentifierName.This);
-                            if (!string.IsNullOrEmpty(comma)) {
-                                codeExceptions.Add(comma);
-                            }
-                            codeExceptions.Add(thisExpression);
+                            AddCodeTemplateExpression(thisExpression, comma, codeExpressions);
                             break;
                         case "class":
                             var type = _semanticModel.GetTypeInfo(target).Type;
-                            var typeName = _generator.GetType()
+                            var typeName = _generator.GetTypeName(type, this);
+                            AddCodeTemplateExpression(typeName, comma, codeExpressions);
                     }
                 }
             }
+        }
+        
+        private void AddCodeTemplateExpression(Expression expression, string comma, List<Expression> codeExpression) {
+            if (!string.IsNullOrEmpty(comma)) {
+                codeExpression.Add(comma);
+            }
+            codeExpression.Add(expression);
+        }
+        
+        /// <summary>
+        /// 修正typename
+        /// </summary>
+        /// <param name="name"></param>
+        /// <param name="symbol"></param>
+        public void ImportTypeName(ref string name, INamedTypeSymbol symbol) {
+            // 判断允许导出
+            if (IsImportTypeNameEnable(symbol)) {
+                int pos = name.LastIndexOf('.');
+                if (pos != -1) {
+                    string prefix = name[..pos];
+                    if (prefix != LuaDefine.IdentifierName.System.name && prefix != LuaDefine.IdentifierName.Class.name) {
+                        string newPrefix = prefix.Replace(".", "");
+                        ProcessNewPrefix(ref newPrefix, prefix);
+                        if (!IsLocalVarExistsInCurMethod(newPrefix)) {
+                            bool success = AddImport(prefix, newPrefix, !symbol.DeclaringSyntaxReferences.IsEmpty);
+                            if (success) {
+                                name = newPrefix + name[pos..];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        /// <summary>
+        /// 加入到声明中
+        /// </summary>
+        /// <param name="prefix"></param>
+        /// <param name="newPrefix"></param>
+        /// <param name="isFromCode"></param>
+        /// <returns></returns>
+        private bool AddImport(string prefix, string newPrefix, bool isFromCode) {
+            if (CurrentThunk.usingDeclares.Exists(i => i.Prefix == prefix && i.IsFromCode == isFromCode)) {
+                return true;
+            }
+
+            CurrentThunk.usingDeclares.Add(new UsingDeclare {
+                Prefix = prefix,
+                NewPrefix = newPrefix,
+                IsFromCode = isFromCode,
+            });
+            return true;
+        }
+        
+        /// <summary>
+        /// 处理前缀
+        /// </summary>
+        /// <param name="newPrefix"></param>
+        /// <param name="prefix"></param>
+        private void ProcessNewPrefix(ref string newPrefix, string prefix) {
+            var usingDeclare = CurrentThunk.usingDeclares.Find(i => i.Prefix == prefix);
+            // 如果已经被处理过了，就不用再处理了
+            if (usingDeclare != null) {
+                newPrefix = usingDeclare.NewPrefix;
+                return;
+            }
+
+            string newName = newPrefix;
+            const int kMaxNameLength = 25;
+            // 如果长度超过25，就尝试去掉中间的部分
+            if (newPrefix.Length > kMaxNameLength) {
+                string[] names = prefix.Split('.');
+                if (names.Length > 2) {
+                    string head = names.First();
+                    string tail = names.Last();
+                    newName = head + tail;
+                    if (newName.Length > kMaxNameLength) {
+                        newName = tail;
+                    }
+                }
+            }
+
+            int index = 0;
+            // 循环处理得到新的前缀
+            while (true) {
+                string result = CSharpToLuaSyntaxWalker.GetNewIdentifierName(newName, index);
+                if (!CurrentThunk.usingDeclares.Exists(i => i.NewPrefix == result)) {
+                    newPrefix = result;
+                    return;
+                }
+                ++index;
+            }
+        }
+
+        /// <summary>
+        /// 判断类型名是否允许导出
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        private bool IsImportTypeNameEnable(INamedTypeSymbol symbol) {
+            // 除了泛型全部允许
+            if (symbol.IsGenericType) {
+                // 防止重复或者不属于当前方法
+                if (IsTypeParameterExists(symbol) && !IsCurMethodTypeArgument(symbol)) {
+                    return false;
+                }
+                return true;
+            }
+            return true;
         }
         
         /// <summary>
