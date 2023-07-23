@@ -44,6 +44,8 @@ namespace Script.ToLua.Editor {
                             var type = _semanticModel.GetTypeInfo(target).Type;
                             var typeName = _generator.GetTypeName(type, this);
                             AddCodeTemplateExpression(typeName, comma, codeExpressions);
+                        default:
+                            
                     }
                 }
             }
