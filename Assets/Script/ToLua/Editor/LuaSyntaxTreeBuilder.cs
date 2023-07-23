@@ -27,7 +27,7 @@ namespace Script.ToLua.Editor
         private readonly Stack<LuaIfStatementSyntax> ifStatements_ = new();
         private readonly Stack<LuaSwitchAdapterStatementSyntax> switches_ = new();
         
-        private Thunk CurCompilationUnit {
+        private Thunk CurrentThunk {
             get {
                 return _thunks.Peek();
             }

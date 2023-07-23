@@ -102,6 +102,7 @@
      <Compile Include="Assets\Script\ToLua\Editor\TestCecil.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\BlockCommon.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\LocalVariableDeclaratorStatement.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\UsingDeclare.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\XmlMetaProvider.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\BlankLineStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\LuaSyntaxTreeBuilder.cs" />

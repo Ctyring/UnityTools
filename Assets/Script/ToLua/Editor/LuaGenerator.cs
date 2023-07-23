@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.Contracts;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -33,7 +35,9 @@ namespace Script.ToLua.Editor {
         public XmlMetaProvider metaProvider;
         private string metas = "";
         public ImmutableList<Expression> assemblyAttributes = ImmutableList<Expression>.Empty;
+        private ConcurrentDictionary<INamedTypeSymbol, LuaTool.ConcurrentHashSet<INamedTypeSymbol>> _genericImportDepends = new(SymbolEqualityComparer.Default);
 
+        
         public void Init() {
             BuildCompilation();
             metaProvider = new XmlMetaProvider(LoadMeta(LuaTool.Split(metas)));
@@ -209,6 +213,21 @@ namespace Script.ToLua.Editor {
                 transform?.ImportGenericTypeName(ref luaExpression, namedTypeSymbol);
                 return luaExpression;
             }
+        }
+        
+        /// <summary>
+        /// 添加泛型导入依赖
+        /// </summary>
+        /// <param name="definition"></param>
+        /// <param name="type"></param>
+        /// <returns></returns>
+        public bool AddGenericImportDepend(INamedTypeSymbol definition, INamedTypeSymbol type) {
+            // 确保type不被重复添加
+            if (type != null && !type.DeclaringSyntaxReferences.IsEmpty && !LuaTool.IsContainsType(definition, type) && !LuaTool.IsDependExists(type, definition)) {
+                var set = _genericImportDepends.GetOrAdd(definition, _ => new LuaTool.ConcurrentHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default));
+                return set.Add(type);
+            }
+            return false;
         }
 
         public void BuildCompilation() {

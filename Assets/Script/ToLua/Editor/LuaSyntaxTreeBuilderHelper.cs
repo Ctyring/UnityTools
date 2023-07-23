@@ -63,13 +63,18 @@ namespace Script.ToLua.Editor {
                 // 判断是否是本地变量
                 if (!IsLocalVarExistsInCurMethod(newName)) {
                     bool success;
-                    if (!symbol.IsTypeParameterExists()) {
-                        success = AddGenericImport(invocationExpression, newName, argumentTypeNames, symbol.IsAbsoluteFromCode());
+                    // 判断是否存在参数类型
+                    if (!IsTypeParameterExists(symbol)) {
+                        // 没有参数，直接添加泛型导入
+                        success = AddGenericImport(invocationExpression, newName, argumentTypeNames, IsAbsoluteFromCode(symbol));
                     } else {
-                        success = CurTypeDeclaration.TypeDeclaration.AddGenericImport(invocationExpression, newName, argumentTypeNames, symbol.IsAbsoluteFromCode(), out var declare);
+                        success = CurTypeDeclaration.TypeDeclaration.AddGenericImport(invocationExpression, newName, argumentTypeNames, IsAbsoluteFromCode(symbol), out var declare);
+                        // declare为null说明已经添加过
                         if (declare != null) {
-                            bool hasAdd = generator_.AddGenericImportDepend(CurTypeDeclaration.TypeSymbol, symbol.OriginalDefinition as INamedTypeSymbol);
-                            if (hasAdd && CurCompilationUnit.IsUsingDeclareConflict(invocationExpression)) {
+                            // 添加泛型的依赖
+                            bool hasAdd = _generator.AddGenericImportDepend(CurTypeDeclaration.TypeSymbol, symbol.OriginalDefinition as INamedTypeSymbol);
+                            // 如果是声明冲突的，就添加到全局
+                            if (hasAdd && CurrentThunk.IsUsingDeclareConflict(invocationExpression)) {
                                 declare.IsFromGlobal = true;
                                 CurTypeDeclaration.TypeDeclaration.AddGlobalParameter();
                             }
@@ -82,6 +87,60 @@ namespace Script.ToLua.Editor {
             }
         }
         
+        /// <summary>
+        /// 添加泛型引用声明
+        /// </summary>
+        /// <param name="invocationExpression"></param>
+        /// <param name="name"></param>
+        /// <param name="argumentTypeNames"></param>
+        /// <param name="isFromCode"></param>
+        /// <returns></returns>
+        bool AddGenericImport(InvocationExpression invocationExpression, string name, List<string> argumentTypeNames, bool isFromCode) {
+            if (CurrentThunk.genericUsingDeclares.Exists(i => i.NewName == name)) {
+                return true;
+            }
+            
+            CurrentThunk.genericUsingDeclares.Add(new GenericUsingDeclare {
+                InvocationExpression = invocationExpression,
+                ArgumentTypeNames = argumentTypeNames,
+                NewName = name,
+                IsFromCode = isFromCode
+            });
+            return true;
+        }
+
+        /// <summary>
+        /// 判断是否定义在代码中
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        public static bool IsAbsoluteFromCode(ITypeSymbol symbol) {
+            if (!symbol.DeclaringSyntaxReferences.IsEmpty) {
+                return true;
+            }
+
+            switch (symbol.Kind) {
+                case SymbolKind.ArrayType: {
+                    var arrayType = (IArrayTypeSymbol)symbol;
+                    if (IsAbsoluteFromCode(arrayType.ElementType)) {
+                        return true;
+                    }
+                    break;
+                }
+                case SymbolKind.NamedType: {
+                    var nameTypeSymbol = (INamedTypeSymbol)symbol;
+                    foreach (var typeArgument in nameTypeSymbol.TypeArguments) {
+                        if (IsAbsoluteFromCode(typeArgument)) {
+                            return true;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>
         /// 判断是否是当前方法的本地变量
         /// </summary>
@@ -167,6 +226,12 @@ namespace Script.ToLua.Editor {
             return false;
         }
         
+        /// <summary>
+        /// 判断是否存在参数类型
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="matchType"></param>
+        /// <returns></returns>
         public static bool IsTypeParameterExists(ITypeSymbol symbol, ITypeSymbol matchType = null) {
             switch (symbol.Kind) {
                 case SymbolKind.ArrayType: {
