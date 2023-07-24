@@ -12,25 +12,31 @@ using Script.ToLua.Editor.luaAst;
 
 namespace Script.ToLua.Editor {
     public partial class LuaSyntaxTreeBuilder {
-        private static readonly Regex codeTemplateRegex_ = new(@"(,?\s*)\{(\*?[\w|`]+)\}", RegexOptions.Compiled); // 匹配 {xxx} 或 {xxx*} 或 {,xxx} 或 {,xxx*}
+        private static readonly Regex
+            codeTemplateRegex_ =
+                new(@"(,?\s*)\{(\*?[\w|`]+)\}", RegexOptions.Compiled); // 匹配 {xxx} 或 {xxx*} 或 {,xxx} 或 {,xxx*}
+
         private int noImportTypeNameCounter_;
         public bool IsNoImportTypeName => noImportTypeNameCounter_ > 0;
+
         /// <summary>
         /// 构建代码模板
         /// </summary>
         /// <returns></returns>
-        private Exception BuildCodeTemplate(string codeTemplate, IdentifierNameExpression memberBindingIdentifierName, ExpressionSyntax target) {
+        private ListExpression BuildCodeTemplate(string codeTemplate, IdentifierNameExpression memberBindingIdentifierName,
+            IList<ITypeSymbol> typeArguments,IEnumerable<Func<Expression>> arguments,
+            ExpressionSyntax target) {
             MatchCollection matches = codeTemplateRegex_.Matches(codeTemplate);
-            List<Expression> codeExpressions = new();
+            ListExpression codeExpressions = new();
             int preIdx = 0;
             // 遍历匹配的结果
             foreach (Match match in matches) {
                 if (match.Index > preIdx) {
                     string preToken = codeTemplate[preIdx..match.Index];
                     if (!string.IsNullOrEmpty(preToken)) {
-                        codeExpressions.Add(preToken);
+                        codeExpressions.list.Add(preToken);
                     }
-                    
+
                     string comma = match.Groups[1].Value;
                     string key = match.Groups[2].Value;
                     switch (key) {
@@ -38,26 +44,198 @@ namespace Script.ToLua.Editor {
                             var thisExpression = memberBindingIdentifierName ?? (target != null
                                 ? BuildMemberAccessTargetExpression(target)
                                 : LuaDefine.IdentifierName.This);
-                            AddCodeTemplateExpression(thisExpression, comma, codeExpressions);
+                            AddCodeTemplateExpression(thisExpression, comma, codeExpressions.list);
                             break;
                         case "class":
                             var type = _semanticModel.GetTypeInfo(target).Type;
-                            var typeName = _generator.GetTypeName(type, this);
-                            AddCodeTemplateExpression(typeName, comma, codeExpressions);
-                        default:
-                            
+                            var typeNameExp = _generator.GetTypeName(type, this);
+                            AddCodeTemplateExpression(typeNameExp, comma, codeExpressions.list);
+                            break;
+                        default: {
+                            switch (key[0]) {
+                                case '`': {
+                                    // ``情况
+                                    if (key.StartsWith("``")) {
+                                        if (int.TryParse(key[2..], out int classTypeIndex)) {
+                                            // 获取class
+                                            var classType =
+                                                (INamedTypeSymbol)_semanticModel.GetTypeInfo(target).Type;
+                                            ITypeSymbol typeArgument = default;
+                                            // 参数从class的参数列表中取，即``标记了使用class第几个arg
+                                            if (classType.TypeArguments.Length > classTypeIndex) {
+                                                typeArgument = classType.TypeArguments[classTypeIndex];
+                                            }
+                                            if (typeArgument != null) {
+                                                var typeName = _generator.GetTypeName(typeArgument);
+                                                AddCodeTemplateExpression(typeName, comma, codeExpressions.list);
+                                            }
+                                        }
+                                    }
+                                    // `情况
+                                    else if (int.TryParse(key[1..], out int typeIndex)) {
+                                        // 从typelist中拿到对应的type
+                                        ITypeSymbol typeArgument = default;
+                                        if (typeArguments.Count > typeIndex) {
+                                            typeArgument = typeArguments[typeIndex];
+                                        }
+                                        if (typeArgument != null) {
+                                            Expression typeName;
+                                            // 如果是enum，需要导出
+                                            if (typeArgument.TypeKind == TypeKind.Enum &&
+                                                codeTemplate.StartsWith("System.Enum")) {
+                                                typeName = _generator.GetTypeShortName(typeArgument);
+                                                _generator.AddExportEnum(typeArgument);
+                                            }
+                                            else {
+                                                typeName = _generator.GetTypeName(typeArgument);
+                                            }
+
+                                            AddCodeTemplateExpression(typeName, comma, codeExpressions.list);
+                                        }
+                                    }
+
+                                    break;
+                                }
+                                case '*': {
+                                    // 从paramsIndex开始，取出所有参数
+                                    if (int.TryParse(key[1..], out int paramsIndex)) {
+                                        List<Expression> expressions = new List<Expression>();
+                                        foreach (var argument in arguments.Skip(paramsIndex)) {
+                                            var argumentExpression = argument();
+                                            expressions.Add(argumentExpression);
+                                        }
+
+                                        if (expressions.Count > 0) {
+                                            // AddCodeTemplateExpression(expressions, comma, codeExpressions.list);
+                                            foreach (Expression expression in expressions) {
+                                                AddCodeTemplateExpression(expression, comma, codeExpressions.list);
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                                default: {
+                                    // 取出对应参数
+                                    if (int.TryParse(key, out int argumentIndex)) {
+                                        var argument = arguments?.ElementAtOrDefault(argumentIndex);
+                                        if (argument != null) {
+                                            var argumentExpression = argument();
+                                            AddCodeTemplateExpression(argumentExpression, comma,
+                                                codeExpressions.list);
+                                        }
+                                    }
+
+                                    break;
+                                }
+                            }
+                            break;
+                        }
                     }
                 }
+                preIdx = match.Index + match.Length;
+            }
+            // 剩余的部分
+            if (preIdx < codeTemplate.Length) {
+                string last = codeTemplate[preIdx..];
+                codeExpressions.list.Add(last);
+            }
+
+            return codeExpressions;
+        }
+        
+        private List<Func<Expression>> FillCodeTemplateInvocationArguments(IMethodSymbol symbol, ArgumentListSyntax argumentList, List<Func<Expression>> argumentExpressions) {
+            argumentExpressions ??= new List<Func<Expression>>();
+            foreach (var argument in argumentList.Arguments) {
+                if (argument.NameColon != null) {
+                    string name = argument.NameColon.Name.Identifier.ValueText;
+                    int index = -1;
+                    foreach (IParameterSymbol parameter in symbol.Parameters) {
+                        if (parameter.Name == name) {
+                            index = symbol.Parameters.IndexOf(parameter);
+                            break;
+                        }
+                    }
+                    if (index == -1) {
+                        throw new InvalidOperationException();
+                    }
+                    argumentExpressions.AddAt(index, () => VisitExpression(argument.Expression));
+                } else {
+                    argumentExpressions.Add(() => VisitExpression(argument.Expression));
+                }
+            }
+
+            for (int i = 0; i < argumentExpressions.Count; ++i) {
+                argumentExpressions[i] ??= () => GetDefaultParameterValue(symbol.Parameters[i], argumentList.Parent, true);
+            }
+
+            if (symbol.Parameters.Length > argumentList.Arguments.Count) {
+                argumentExpressions.AddRange(symbol.Parameters.Skip(argumentList.Arguments.Count).Where(i => !i.IsParams).Select(i => {
+                    var func = Expression () => GetDefaultParameterValue(i, argumentList.Parent, true);
+                    return func;
+                }));
+            }
+
+            return argumentExpressions;
+        }
+        
+        private Expression VisitExpression(ExpressionSyntax node) {
+            var exp = (Expression)node.Accept(this);
+            CheckConversion(node, ref exp);
+            return exp;
+        }
+        
+        private void CheckConversion(ExpressionSyntax node, ref Expression expression) {
+            if (IsUserConversion(_semanticModel, node, out var methodSymbol)) {
+                expression = BuildConversionExpression(methodSymbol, expression);
             }
         }
         
+        private Expression BuildConversionExpression(IMethodSymbol methodSymbol, Expression expression) {
+            var codeTemplate = _generator.metaProvider.GetMethodCodeTemplate(methodSymbol);
+            if (codeTemplate != null) {
+                var args = new [] { expression };
+                return BuildCodeTemplate(codeTemplate, null, null, args.Select<Expression, Func<Expression>>(i => () => i), null);
+            }
+
+            var memberAccess = GetOperatorMemberAccessExpression(methodSymbol);
+            return new InvocationExpression(memberAccess, expression);
+        }
+        
+        private Expression GetOperatorMemberAccessExpression(IMethodSymbol methodSymbol) {
+            var methodName = GetMemberName(methodSymbol);
+            if (SymbolEqualityComparer.Default.Equals(CurTypeSymbol, methodSymbol.ContainingType)) {
+                return methodName;
+            }
+
+            if (CurTypeSymbol.IsContainsInternalSymbol(methodSymbol)) {
+                if (CurTypeSymbol.GetMembers(methodSymbol.Name).IsEmpty) {
+                    return methodName;
+                }
+            }
+
+            var typeName = _generator.GetTypeName(methodSymbol.ContainingType);
+            return typeName.MemberAccess(methodName);
+        }
+        
+        public static bool IsUserConversion(SemanticModel semanticModel, ExpressionSyntax node, out IMethodSymbol methodSymbol) {
+            var conversion = semanticModel.GetConversion(node);
+            if (conversion.IsUserDefined && conversion.IsImplicit) {
+                methodSymbol = conversion.MethodSymbol;
+                return true;
+            }
+
+            methodSymbol = null;
+            return false;
+        } 
+
         private void AddCodeTemplateExpression(Expression expression, string comma, List<Expression> codeExpression) {
             if (!string.IsNullOrEmpty(comma)) {
                 codeExpression.Add(comma);
             }
+
             codeExpression.Add(expression);
         }
-        
+
         /// <summary>
         /// 修正typename
         /// </summary>
@@ -69,7 +247,8 @@ namespace Script.ToLua.Editor {
                 int pos = name.LastIndexOf('.');
                 if (pos != -1) {
                     string prefix = name[..pos];
-                    if (prefix != LuaDefine.IdentifierName.System.name && prefix != LuaDefine.IdentifierName.Class.name) {
+                    if (prefix != LuaDefine.IdentifierName.System.name &&
+                        prefix != LuaDefine.IdentifierName.Class.name) {
                         string newPrefix = prefix.Replace(".", "");
                         ProcessNewPrefix(ref newPrefix, prefix);
                         if (!IsLocalVarExistsInCurMethod(newPrefix)) {
@@ -82,7 +261,7 @@ namespace Script.ToLua.Editor {
                 }
             }
         }
-        
+
         /// <summary>
         /// 加入到声明中
         /// </summary>
@@ -102,7 +281,7 @@ namespace Script.ToLua.Editor {
             });
             return true;
         }
-        
+
         /// <summary>
         /// 处理前缀
         /// </summary>
@@ -139,6 +318,7 @@ namespace Script.ToLua.Editor {
                     newPrefix = result;
                     return;
                 }
+
                 ++index;
             }
         }
@@ -155,18 +335,21 @@ namespace Script.ToLua.Editor {
                 if (IsTypeParameterExists(symbol) && !IsCurMethodTypeArgument(symbol)) {
                     return false;
                 }
+
                 return true;
             }
+
             return true;
         }
-        
+
         /// <summary>
         /// 导入泛型类型名
         /// </summary>
         /// <param name="luaExpression"></param>
         /// <param name="symbol"></param>
         public void ImportGenericTypeName(ref Expression luaExpression, ITypeSymbol symbol) {
-            if (!IsNoImportTypeName && !SymbolEqualityComparer.Default.Equals(CurTypeSymbol, symbol) && !IsCurMethodTypeArgument(symbol)) {
+            if (!IsNoImportTypeName && !SymbolEqualityComparer.Default.Equals(CurTypeSymbol, symbol) &&
+                !IsCurMethodTypeArgument(symbol)) {
                 var invocationExpression = (InvocationExpression)luaExpression;
                 string newName = GetGenericTypeImportName(invocationExpression, out var argumentTypeNames);
                 // 判断是否是本地变量
@@ -175,13 +358,17 @@ namespace Script.ToLua.Editor {
                     // 判断是否存在参数类型
                     if (!IsTypeParameterExists(symbol)) {
                         // 没有参数，直接添加泛型导入
-                        success = AddGenericImport(invocationExpression, newName, argumentTypeNames, IsAbsoluteFromCode(symbol));
-                    } else {
-                        success = CurTypeDeclaration.TypeDeclaration.AddGenericImport(invocationExpression, newName, argumentTypeNames, IsAbsoluteFromCode(symbol), out var declare);
+                        success = AddGenericImport(invocationExpression, newName, argumentTypeNames,
+                            IsAbsoluteFromCode(symbol));
+                    }
+                    else {
+                        success = CurTypeDeclaration.TypeDeclaration.AddGenericImport(invocationExpression, newName,
+                            argumentTypeNames, IsAbsoluteFromCode(symbol), out var declare);
                         // declare为null说明已经添加过
                         if (declare != null) {
                             // 添加泛型的依赖
-                            bool hasAdd = _generator.AddGenericImportDepend(CurTypeDeclaration.TypeSymbol, symbol.OriginalDefinition as INamedTypeSymbol);
+                            bool hasAdd = _generator.AddGenericImportDepend(CurTypeDeclaration.TypeSymbol,
+                                symbol.OriginalDefinition as INamedTypeSymbol);
                             // 如果是声明冲突的，就添加到全局
                             if (hasAdd && CurrentThunk.IsUsingDeclareConflict(invocationExpression)) {
                                 declare.IsFromGlobal = true;
@@ -189,13 +376,14 @@ namespace Script.ToLua.Editor {
                             }
                         }
                     }
+
                     if (success) {
                         luaExpression = newName;
                     }
                 }
             }
         }
-        
+
         /// <summary>
         /// 添加泛型引用声明
         /// </summary>
@@ -204,11 +392,12 @@ namespace Script.ToLua.Editor {
         /// <param name="argumentTypeNames"></param>
         /// <param name="isFromCode"></param>
         /// <returns></returns>
-        bool AddGenericImport(InvocationExpression invocationExpression, string name, List<string> argumentTypeNames, bool isFromCode) {
+        bool AddGenericImport(InvocationExpression invocationExpression, string name, List<string> argumentTypeNames,
+            bool isFromCode) {
             if (CurrentThunk.genericUsingDeclares.Exists(i => i.NewName == name)) {
                 return true;
             }
-            
+
             CurrentThunk.genericUsingDeclares.Add(new GenericUsingDeclare {
                 InvocationExpression = invocationExpression,
                 ArgumentTypeNames = argumentTypeNames,
@@ -234,6 +423,7 @@ namespace Script.ToLua.Editor {
                     if (IsAbsoluteFromCode(arrayType.ElementType)) {
                         return true;
                     }
+
                     break;
                 }
                 case SymbolKind.NamedType: {
@@ -243,6 +433,7 @@ namespace Script.ToLua.Editor {
                             return true;
                         }
                     }
+
                     break;
                 }
             }
@@ -263,36 +454,39 @@ namespace Script.ToLua.Editor {
                     return true;
                 }
             }
+
             return false;
         }
-        
+
         private static bool IsLocalVarExists(string name, SyntaxNode root) {
             var searcher = new LocalValueWalker(name);
             return searcher.Find(root);
         }
-        
+
         public static SyntaxNode GetDeclaringSyntaxNode(ISymbol symbol) {
             return symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
         }
-        
-        private static string GetGenericTypeImportName(InvocationExpression invocationExpression, out List<string> argumentTypeNames) {
+
+        private static string GetGenericTypeImportName(InvocationExpression invocationExpression,
+            out List<string> argumentTypeNames) {
             StringBuilder sb = new StringBuilder();
             argumentTypeNames = new List<string>();
             FillGenericTypeImportName(sb, argumentTypeNames, invocationExpression);
             return sb.ToString();
         }
-        
+
         static string CheckLastName(string lastName) {
             return lastName == "Dictionary" ? "Dict" : lastName;
         }
-        
+
         /// <summary>
         /// 获取需要填充泛型的类型名
         /// </summary>
         /// <param name="sb"></param>
         /// <param name="argumentTypeNames"></param>
         /// <param name="invocationExpression"></param>
-        private static void FillGenericTypeImportName(StringBuilder sb, List<string> argumentTypeNames, InvocationExpression invocationExpression) {
+        private static void FillGenericTypeImportName(StringBuilder sb, List<string> argumentTypeNames,
+            InvocationExpression invocationExpression) {
             var identifierName = (IdentifierNameExpression)invocationExpression.expression;
             sb.Append(CheckLastName(LastName(identifierName.name)));
             foreach (var argument in invocationExpression.arguments) {
@@ -300,31 +494,34 @@ namespace Script.ToLua.Editor {
                     string argumentTypeName = typeName.name;
                     sb.Append(CheckLastName(LastName(argumentTypeName)));
                     argumentTypeNames.Add(argumentTypeName);
-                } else {
+                }
+                else {
                     FillGenericTypeImportName(sb, argumentTypeNames, (InvocationExpression)argument);
                 }
             }
         }
-        
+
         public static string LastName(string s) {
             int pos = s.LastIndexOf('.');
             if (pos != -1) {
                 return s[(pos + 1)..];
             }
+
             return s;
         }
-        
+
         private bool IsCurMethodTypeArgument(ITypeSymbol symbol) {
             var methodInfo = CurMethodInfoOrNull;
             if (methodInfo != null) {
                 return IsMethodTypeArgument(methodInfo.Symbol, symbol);
             }
+
             return false;
         }
-        
+
         private static bool IsMethodTypeArgument(IMethodSymbol method, ITypeSymbol symbol) {
             if (method.TypeArguments.Length > 0) {
-                return method.TypeArguments.Any(i=>IsTypeParameterExists(i));
+                return method.TypeArguments.Any(i => IsTypeParameterExists(i));
             }
 
             if (method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction) {
@@ -332,9 +529,10 @@ namespace Script.ToLua.Editor {
                     return IsMethodTypeArgument(containingMethod, symbol);
                 }
             }
+
             return false;
         }
-        
+
         /// <summary>
         /// 判断是否存在参数类型
         /// </summary>
@@ -348,6 +546,7 @@ namespace Script.ToLua.Editor {
                     if (IsTypeParameterExists(arrayType.ElementType, matchType)) {
                         return true;
                     }
+
                     break;
                 }
                 case SymbolKind.NamedType: {
@@ -357,11 +556,13 @@ namespace Script.ToLua.Editor {
                             return true;
                         }
                     }
+
                     if (symbol.ContainingType != null) {
                         if (IsTypeParameterExists(symbol.ContainingType, matchType)) {
                             return true;
                         }
                     }
+
                     break;
                 }
                 case SymbolKind.TypeParameter: {
@@ -372,6 +573,7 @@ namespace Script.ToLua.Editor {
                     if (IsTypeParameterExists(pointType.PointedAtType, matchType)) {
                         return true;
                     }
+
                     break;
                 }
             }
@@ -390,7 +592,7 @@ namespace Script.ToLua.Editor {
 
             return expression;
         }
-        
+
         private void ProcessPrevIsInvokeStatement(ExpressionSyntax node) {
             SyntaxNode current = node;
             while (true) {
@@ -410,6 +612,7 @@ namespace Script.ToLua.Editor {
                         if (parent is AssignmentExpressionSyntax assignment && assignment.Right == current) {
                             return;
                         }
+
                         break;
                     }
                 }
@@ -417,12 +620,14 @@ namespace Script.ToLua.Editor {
                 if (parent.IsKind(SyntaxKind.ExpressionStatement)) {
                     break;
                 }
+
                 current = parent;
             }
 
             var curBlock = _blocks.Count > 0 ? _blocks.Peek() : null;
             if (curBlock != null) {
-                var statement = curBlock.statements.FindLast(i => i is not BlankLineStatement && i is not CommentStatement);
+                var statement =
+                    curBlock.statements.FindLast(i => i is not BlankLineStatement && i is not CommentStatement);
                 if (statement != null) {
                     statement.ForceSemicolon = true;
                 }
@@ -440,6 +645,7 @@ namespace Script.ToLua.Editor {
                             case double.NaN:
                                 return null;
                         }
+
                         break;
                     case float f:
                         switch (f) {
@@ -448,31 +654,36 @@ namespace Script.ToLua.Editor {
                             case float.NaN:
                                 return null;
                         }
+
                         break;
                     case null:
                         return new ConstExpression(LuaDefine.IdentifierName.Nil.name, "nil");
                 }
-                
+
                 ValExpression expression = GetLiteralExpression(constValue.Value);
                 return new ConstExpression(expression.value, node.ToString());
             }
+
             return null;
         }
-        
+
         private ValExpression GetLiteralExpression(object constantValue) {
             if (constantValue != null) {
                 var code = Type.GetTypeCode(constantValue.GetType());
                 switch (code) {
                     case TypeCode.Char: {
                         Debug.Assert(constantValue != null, nameof(constantValue) + " != null");
-                        return new CharExpression(((int)constantValue).ToString(), SyntaxFactory.Literal((char)constantValue).Text);
+                        return new CharExpression(((int)constantValue).ToString(),
+                            SyntaxFactory.Literal((char)constantValue).Text);
                     }
                     case TypeCode.String: {
                         return BuildStringLiteralExpression((string)constantValue);
                     }
                     case TypeCode.Boolean: {
                         bool v = (bool)constantValue;
-                        return v ? new ValExpression(LuaDefine.IdentifierName.True.name, LuaDefine.IdentifierName.True) : new ValExpression(LuaDefine.IdentifierName.False.name, LuaDefine.IdentifierName.False);
+                        return v
+                            ? new ValExpression(LuaDefine.IdentifierName.True.name, LuaDefine.IdentifierName.True)
+                            : new ValExpression(LuaDefine.IdentifierName.False.name, LuaDefine.IdentifierName.False);
                     }
                     case TypeCode.Single: {
                         float v = (float)constantValue;
@@ -484,18 +695,20 @@ namespace Script.ToLua.Editor {
                     }
                     case TypeCode.Int64: {
                         if (constantValue is long.MinValue) {
-                            const long kMinInteger = long.MinValue + 1;     // in lua5.4 long.MinValue will be float
+                            const long kMinInteger = long.MinValue + 1; // in lua5.4 long.MinValue will be float
                             return new IdentifierExpression($"({kMinInteger} - 1)");
                         }
+
                         break;
                     }
                 }
+
                 return new IdentifierExpression(constantValue.ToString());
             }
 
             return new ValExpression(LuaDefine.IdentifierName.Nil.name, LuaDefine.IdentifierName.Nil);
         }
-        
+
         private StringExpression BuildStringLiteralExpression(string value) {
             string text = SyntaxFactory.Literal(value).Text;
             return new StringExpression(text);

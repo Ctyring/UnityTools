@@ -44,6 +44,7 @@ namespace Script.ToLua.Editor
 
         LuaTool.ConcurrentHashSet<string> _exportEnums = new();
         LuaTool.ConcurrentHashSet<ITypeSymbol> _ignoreExportTypes = new(SymbolEqualityComparer.Default);
+        Dictionary<ISymbol, IdentifierNameExpression> _memberNames = new(SymbolEqualityComparer.Default);
 
         public SettingInfo Setting { get; set; }
 
@@ -627,6 +628,165 @@ namespace Script.ToLua.Editor
         public void AddNamespaceRefactorNames(INamespaceSymbol symbol, string name)
         {
             _namespaceRefactorNames.Add(symbol, name);
+        }
+        
+        public void AddExportEnum(ITypeSymbol enumType) {
+            Contract.Assert(enumType.TypeKind == TypeKind.Enum);
+            if (!enumType.DeclaringSyntaxReferences.IsEmpty) {
+                _exportEnums.Add(enumType.ToString());
+            }
+        }
+        
+        public IdentifierNameExpression GetMemberName(ISymbol symbol) {
+            CheckOriginalDefinition(ref symbol);
+            IdentifierNameExpression name = default;
+            lock (_memberNames) {
+                if (_memberNames.TryGetValue(symbol, out var v)) {
+                    name = v;
+                }
+            }
+            if (name == null) {
+                lock(_memberNames) {
+                    name = _memberNames.GetOrAdd(symbol, symbol => {
+                        var identifierName = InternalGetMemberName(symbol);
+                        CheckMemberBadName(identifierName.ValueText, symbol);
+                        return new LuaSymbolNameSyntax(identifierName);
+                    });
+                }
+            }
+            return name;
+        }
+        
+        private IdentifierNameExpression InternalGetMemberName(ISymbol symbol) {
+            if (symbol.Kind == SymbolKind.Method) {
+                string name = metaProvider.GetMethodMapName((IMethodSymbol)symbol);
+                if (name != null) {
+                    return name;
+                }
+            } else if (symbol.Kind == SymbolKind.Property) {
+                string name = metaProvider.GetPropertyMapName((IPropertySymbol)symbol);
+                if (name != null) {
+                    return name;
+                }
+            }
+
+            if (!IsFromLuaModule(symbol)) {
+                return GetSymbolBaseName(symbol);
+            }
+
+            if (symbol.IsStatic) {
+                if (symbol.ContainingType.IsStatic) {
+                    return GetStaticClassMemberName(symbol);
+                }
+            }
+
+            while (symbol.IsOverride) {
+                var overriddenSymbol = symbol.OverriddenSymbol();
+                symbol = overriddenSymbol;
+            }
+
+            return GetAllTypeSameName(symbol);
+        }
+        
+        private IdentifierNameExpression GetStaticClassMemberName(ISymbol symbol) {
+            var sameNameMembers = GetStaticClassSameNameMembers(symbol);
+            IdentifierNameExpression symbolExpression = null;
+
+            int index = 0;
+            foreach (ISymbol member in sameNameMembers) {
+                IdentifierNameExpression identifierName = GetMethodNameFromIndex(symbol, index);
+                if (member.EQ(symbol)) {
+                    symbolExpression = identifierName;
+                } else {
+                    if (!_memberNames.ContainsKey(member)) {
+                        _memberNames.Add(member, new SymbolExpression(identifierName));
+                    }
+                }
+                ++index;
+            }
+
+            if (symbolExpression == null) {
+                throw new InvalidOperationException();
+            }
+            return symbolExpression;
+        }
+        
+        private string GetSymbolBaseName(ISymbol symbol) {
+            switch (symbol.Kind) {
+                case SymbolKind.Method: {
+                    IMethodSymbol method = (IMethodSymbol)symbol;
+                    string name = metaProvider.GetMethodMapName(method);
+                    if (name != null) {
+                        return name;
+                    }
+                    var implementation = method.ExplicitInterfaceImplementations.FirstOrDefault();
+                    if (implementation != null) {
+                        return implementation.Name;
+                    }
+                    break;
+                }
+                case SymbolKind.Property: {
+                    IPropertySymbol property = (IPropertySymbol)symbol;
+                    if (property.IsIndexer) {
+                        return string.Empty;
+                    }
+
+                    var implementation = property.ExplicitInterfaceImplementations.FirstOrDefault();
+                    if (implementation != null) {
+                        return implementation.Name;
+                    }
+                    break;
+                }
+                case SymbolKind.Event: {
+                    IEventSymbol eventSymbol = (IEventSymbol)symbol;
+                    var implementation = eventSymbol.ExplicitInterfaceImplementations.FirstOrDefault();
+                    if (implementation != null) {
+                        return implementation.Name;
+                    }
+                    break;
+                }
+            }
+            return symbol.Name;
+        }
+        
+        internal bool IsFromLuaModule(ISymbol symbol) {
+            return !symbol.DeclaringSyntaxReferences.IsEmpty || IsFromModuleOnly(symbol);
+        }
+
+        private bool IsFromModuleOnly(ISymbol symbol) {
+            var luaModuleLibs = Setting.LuaModuleLibs;
+            return luaModuleLibs != null && luaModuleLibs.Contains(symbol.ContainingAssembly.Name);
+        }
+        
+        public static void CheckOriginalDefinition(ref ISymbol symbol) {
+            if (symbol.Kind == SymbolKind.Method) {
+                IMethodSymbol methodSymbol = (IMethodSymbol)symbol;
+                CheckMethodDefinition(ref methodSymbol);
+                if (!SymbolEqualityComparer.Default.Equals(methodSymbol, symbol)) {
+                    symbol = methodSymbol;
+                }
+            } else {
+                CheckSymbolDefinition(ref symbol);
+            }
+        }
+        
+        public static void CheckMethodDefinition(ref IMethodSymbol symbol) {
+            if (symbol.IsExtensionMethod) {
+                if (symbol.ReducedFrom != null && !SymbolEqualityComparer.Default.Equals(symbol.ReducedFrom, symbol)) {
+                    symbol = symbol.ReducedFrom;
+                } else {
+                    CheckSymbolDefinition(ref symbol);
+                }
+            } else {
+                CheckSymbolDefinition(ref symbol);
+            }
+        }
+        
+        private static void CheckSymbolDefinition<T>(ref T symbol) where T : class, ISymbol {
+            var originalDefinition = (T)symbol.OriginalDefinition;
+            if (originalDefinition != symbol) {
+                symbol = originalDefinition;
+            }
         }
     }
 }
