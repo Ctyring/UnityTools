@@ -111,7 +111,7 @@ namespace Script.ToLua.Editor
             return false;
         }
         
-        private static string EncodeToIdentifier(string name) {
+        public static string EncodeToIdentifier(string name) {
             StringBuilder sb = new StringBuilder();
             foreach (char c in name) {
                 if (c < 127) {

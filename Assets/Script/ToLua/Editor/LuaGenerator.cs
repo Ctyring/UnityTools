@@ -1,4 +1,5 @@
 ﻿using System;
+using System.CodeDom;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -7,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using CSharpLua;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -45,6 +47,13 @@ namespace Script.ToLua.Editor
         LuaTool.ConcurrentHashSet<string> _exportEnums = new();
         LuaTool.ConcurrentHashSet<ITypeSymbol> _ignoreExportTypes = new(SymbolEqualityComparer.Default);
         Dictionary<ISymbol, IdentifierNameExpression> _memberNames = new(SymbolEqualityComparer.Default);
+
+        private ConcurrentDictionary<IEventSymbol, bool>
+            _isFieldEvents = new ConcurrentDictionary<IEventSymbol, bool>();
+        ConcurrentDictionary<IPropertySymbol, bool> _isFieldProperties = new(SymbolEqualityComparer.Default);
+        Dictionary<INamedTypeSymbol, HashSet<string>> _typeUsedNames = new(SymbolEqualityComparer.Default);
+        HashSet<ISymbol> _refactorNames = new(SymbolEqualityComparer.Default);
+        Dictionary<ISymbol, string> _memberIllegalNames = new(SymbolEqualityComparer.Default);
 
         public SettingInfo Setting { get; set; }
 
@@ -373,7 +382,7 @@ namespace Script.ToLua.Editor
         /// </summary>
         /// <param name="enumType"></param>
         /// <returns></returns>
-        bool IsConstantEnum(ITypeSymbol enumType)
+        public bool IsConstantEnum(ITypeSymbol enumType)
         {
             if (enumType.TypeKind == TypeKind.Enum)
             {
@@ -637,7 +646,13 @@ namespace Script.ToLua.Editor
             }
         }
         
+        /// <summary>
+        /// 将symbol的成员名加入成员名列表
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns>symbol的name表达式</returns>
         public IdentifierNameExpression GetMemberName(ISymbol symbol) {
+            // 拿到原始定义
             CheckOriginalDefinition(ref symbol);
             IdentifierNameExpression name = default;
             lock (_memberNames) {
@@ -647,57 +662,506 @@ namespace Script.ToLua.Editor
             }
             if (name == null) {
                 lock(_memberNames) {
-                    name = _memberNames.GetOrAdd(symbol, symbol => {
-                        var identifierName = InternalGetMemberName(symbol);
-                        CheckMemberBadName(identifierName.ValueText, symbol);
-                        return new LuaSymbolNameSyntax(identifierName);
-                    });
+                    if (!_memberNames.TryGetValue(symbol, out var v)) {
+                        // 处理symbol和其成员的名称
+                        v = ProcessMemberName(symbol);
+                        _memberNames.Add(symbol, v);
+                    }
+
+                    name = _memberNames[symbol];
                 }
             }
             return name;
         }
+
+        /// <summary>
+        /// 处理symbol及其成员名
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns>symbol的name表达式</returns>
+        SymbolExpression ProcessMemberName(ISymbol symbol) {
+            // 得到处理后的symbol名称，并会记录和处理所有成员名
+            var identifierName = InternalGetMemberName(symbol);
+            // 判断symbol是否需要重构
+            CheckMemberBadName(identifierName.name, symbol);
+            return new SymbolExpression(identifierName);
+        }
         
+        /// <summary>
+        /// 判断symbol是否需要重构
+        /// </summary>
+        /// <param name="originalString"></param>
+        /// <param name="symbol"></param>
+        private void CheckMemberBadName(string originalString, ISymbol symbol) {
+            // 只有具有声明依赖的symbol才需要检查
+            if (!symbol.DeclaringSyntaxReferences.IsEmpty) {
+                bool isCheckNeedReserved = false;
+                bool isCheckIllegalIdentifier = true;
+                switch (symbol.Kind) {
+                    // 字段和方法需要检查是否是保留字
+                    case SymbolKind.Field:
+                    case SymbolKind.Method:
+                        isCheckNeedReserved = true;
+                        break;
+
+                    // 对于属性类型，需要判断是否是索引器
+                    case SymbolKind.Property:
+                        var propertySymbol = (IPropertySymbol)symbol;
+                        if (propertySymbol.IsIndexer) {
+                            isCheckIllegalIdentifier = false;
+                        } else {
+                            isCheckNeedReserved = true;
+                        }
+                        break;
+
+                    // 对于事件类型，需要判断是否是事件字段
+                    case SymbolKind.Event:
+                        if (IsEventField((IEventSymbol)symbol)) {
+                            isCheckNeedReserved = true;
+                        }
+                        break;
+                }
+
+                // 判断是否是保留字
+                if (isCheckNeedReserved) {
+                    if (LuaSyntaxNode.IsMethodReservedWord(originalString)) {
+                        _refactorNames.Add(symbol);
+                        isCheckIllegalIdentifier = false;
+                    }
+                }
+
+                // 判断是否是非法标识符
+                if (isCheckIllegalIdentifier) {
+                    if (IsIdentifierIllegal(ref originalString)) {
+                        _refactorNames.Add(symbol);
+                        _memberIllegalNames.Add(symbol, originalString);
+                    }
+                }
+            }
+        }
+        
+        private static readonly Regex _identifierRegex = new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
+        public static bool IsIdentifierIllegal(ref string identifierName) {
+            if (!_identifierRegex.IsMatch(identifierName)) {
+                identifierName = CSharpToLuaSyntaxWalker.EncodeToIdentifier(identifierName);
+                return true;
+            }
+            return false;
+        }
+        
+        bool IsEventField(IEventSymbol symbol) {
+            return _isFieldEvents.GetOrAdd(symbol, symbol =>
+                !_implicitInterfaceImplementations.ContainsKey(symbol) && IsEventFieldInternal(symbol));
+        }
+        
+        bool IsEventFieldInternal(IEventSymbol symbol) {
+            if (IsOverridable(symbol) || IsInterfaceImplementation(symbol)) {
+                return false;
+            }
+
+            if (IsFromModuleOnly(symbol)) {
+                return IsModuleAutoField(symbol);
+            }
+
+            if (IsFromAssembly(symbol)) {
+                return false;
+            }
+
+            var node = LuaSyntaxTreeBuilder.GetDeclaringSyntaxNode(symbol);
+            if (node != null) {
+                return node.IsKind(SyntaxKind.VariableDeclarator);
+            }
+
+            return false;
+        }
+        
+        private static bool IsModuleAutoField(ISymbol symbol) {
+            var method = symbol.Kind == SymbolKind.Property ? ((IPropertySymbol)symbol).GetMethod : ((IEventSymbol)symbol).AddMethod;
+            return method != null && HasCompilerGeneratedAttribute(method.GetAttributes());
+        }
+        
+        public static bool HasCompilerGeneratedAttribute(ImmutableArray<AttributeData> attrs) {
+            return attrs.Any(i => IsCompilerGeneratedAttribute(i.AttributeClass));
+        }
+        
+        public static bool IsCompilerGeneratedAttribute(INamedTypeSymbol symbol) {
+            return symbol.Name == "CompilerGeneratedAttribute" && IsRuntimeCompilerServices(symbol.ContainingNamespace);
+        }
+        
+        public static bool IsRuntimeCompilerServices(INamespaceSymbol symbol) {
+            return symbol.Name == "CompilerServices" && symbol.ContainingNamespace.Name == "Runtime" && symbol.ContainingNamespace.ContainingNamespace.Name == "System";
+        }
+        
+        public static bool IsInterfaceImplementation<T>(T symbol) where T : ISymbol {
+            if (!symbol.IsStatic) {
+                var type = symbol.ContainingType;
+                if (type != null) {
+                    var interfaceSymbols = type.AllInterfaces.SelectMany(i => i.GetMembers().OfType<T>());
+                    return interfaceSymbols.Any(i => symbol.Equals(type.FindImplementationForInterfaceMember(i)));
+                }
+            }
+            return false;
+        }
+        
+        public static bool IsOverridable(ISymbol symbol) {
+            return !symbol.IsStatic && (symbol.IsAbstract || symbol.IsVirtual || symbol.IsOverride);
+        }
+        
+        /// <summary>
+        /// 获取成员名
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
         private IdentifierNameExpression InternalGetMemberName(ISymbol symbol) {
+            // 方法
             if (symbol.Kind == SymbolKind.Method) {
+                // 获取方法名
                 string name = metaProvider.GetMethodMapName((IMethodSymbol)symbol);
                 if (name != null) {
                     return name;
                 }
-            } else if (symbol.Kind == SymbolKind.Property) {
+            }
+            // 属性
+            else if (symbol.Kind == SymbolKind.Property) {
+                // 获取属性名
                 string name = metaProvider.GetPropertyMapName((IPropertySymbol)symbol);
                 if (name != null) {
                     return name;
                 }
             }
 
+            // 如果不来自Lua模块
             if (!IsFromLuaModule(symbol)) {
                 return GetSymbolBaseName(symbol);
             }
 
+            // 如果是静态成员
             if (symbol.IsStatic) {
                 if (symbol.ContainingType.IsStatic) {
                     return GetStaticClassMemberName(symbol);
                 }
             }
 
+            // 如果是重写符号，找到最上层的被重写符号
             while (symbol.IsOverride) {
-                var overriddenSymbol = symbol.OverriddenSymbol();
+                var overriddenSymbol = OverriddenSymbol(symbol);
                 symbol = overriddenSymbol;
             }
 
             return GetAllTypeSameName(symbol);
         }
         
+        /// <summary>
+        /// 记录全部类型的同名成员
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns>symbol修饰后的name表达式</returns>
+        /// <exception cref="InvalidOperationException"></exception>
+        private IdentifierNameExpression GetAllTypeSameName(ISymbol symbol) {
+            List<ISymbol> sameNameMembers = GetSameNameMembers(symbol);
+            IdentifierNameExpression symbolExpression = null;
+            int index = 0;
+            // 处理每个同名成员
+            foreach (ISymbol member in sameNameMembers) {
+                // 判断是否是当前符号本身
+                if (IsSameNameSymbol(member, symbol)) {
+                    symbolExpression = GetSymbolBaseName(symbol);
+                } else {
+                    if (!_memberNames.ContainsKey(member)) {
+                        IdentifierNameExpression identifierName = GetSymbolBaseName(member);
+                        _memberNames.Add(member, new SymbolExpression(identifierName));
+                    }
+                }
+                if (index > 0) {
+                    // 记录原始定义到需要重构的符号列表
+                    ISymbol refactorSymbol = member;
+                    CheckOriginalDefinition(ref refactorSymbol);
+                    _refactorNames.Add(refactorSymbol);
+                }
+                ++index;
+            }
+            if (symbolExpression == null) {
+                throw new InvalidOperationException();
+            }
+            return symbolExpression;
+        }
+        
+        /// <summary>
+        /// 判断是否是同名符号
+        /// </summary>
+        /// <param name="member"></param>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        private static bool IsSameNameSymbol(ISymbol member, ISymbol symbol) {
+            // 完全相同
+            if (SymbolEqualityComparer.Default.Equals(member, symbol)) {
+                return true;
+            }
+
+            if (symbol.Kind == SymbolKind.Method) {
+                var methodSymbol = (IMethodSymbol)symbol;
+                // Partial修饰的方法
+                if (methodSymbol.PartialDefinitionPart != null && SymbolEqualityComparer.Default.Equals(methodSymbol.PartialDefinitionPart, member)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        
+        /// <summary>
+        /// 获取symbol的同名成员
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        private List<ISymbol> GetSameNameMembers(ISymbol symbol) {
+            List<ISymbol> members = new List<ISymbol>();
+            var names = GetSymbolNames(symbol);
+            var rootType = symbol.ContainingType;
+            var curTypeSymbol = rootType;
+            // 获取同名成员，并不断向上查找基类
+            while (true) {
+                AddSimilarNameMembers(curTypeSymbol, names, members, !SymbolEqualityComparer.Default.Equals(rootType, curTypeSymbol));
+                var baseTypeSymbol = curTypeSymbol.BaseType;
+                if (baseTypeSymbol != null) {
+                    curTypeSymbol = baseTypeSymbol;
+                } else {
+                    break;
+                }
+            }
+            // 排序
+            members.Sort(MemberSymbolComparison);
+            return members;
+        }
+        
+        /// <summary>
+        /// symbol的比较器
+        /// </summary>
+        /// <param name="a"></param>
+        /// <param name="b"></param>
+        /// <returns></returns>
+        /// <exception cref="Exception"></exception>
+        private int MemberSymbolComparison(ISymbol a, ISymbol b) {
+            // 相同符号
+            if (SymbolEqualityComparer.Default.Equals(a, b)) {
+                return 0;
+            }
+
+            // 比较是否来自Lua模块，不来自lua模块的优先级高
+            bool isFromCodeOfA = IsFromLuaModule(a.ContainingType);
+            bool isFromCodeOfB = IsFromLuaModule(b.ContainingType);
+
+            if (!isFromCodeOfA) {
+                if (!isFromCodeOfB) {
+                    return 0;
+                }
+
+                return -1;
+            }
+
+            if (!isFromCodeOfB) {
+                return 1;
+            }
+
+            // 比较接口实现的数量
+            int countOfA = AllInterfaceImplementationsCount(a);
+            int countOfB = AllInterfaceImplementationsCount(b);
+            if (countOfA > 0 || countOfB > 0) {
+                if (countOfA != countOfB) {
+                    // 接口实现数量多的优先级高
+                    return countOfA > countOfB ? -1 : 1;
+                }
+
+                // 比较都只有一个接口实现的情况
+                if (countOfA == 1) {
+                    var implementationOfA = InterfaceImplementations(a).First();
+                    var implementationOfB = InterfaceImplementations(b).First();
+                    if (SymbolEqualityComparer.Default.Equals(implementationOfA, implementationOfB)) {
+                        throw new Exception($"{a} is conflict with {b}");
+                    }
+                    // 比较两个接口实现
+                    if (MemberSymbolBoolComparison(implementationOfA, implementationOfB, i => !IsExplicitInterfaceImplementation(i), out int result)) {
+                        return result;
+                    }
+                }
+
+                return MemberSymbolCommonComparison(a, b);
+            }
+
+            if (MemberSymbolBoolComparison(a, b, i => i.IsAbstract, out var v)) {
+                return v;
+            }
+            if (MemberSymbolBoolComparison(a, b, i => i.IsVirtual, out v)) {
+                return v;
+            }
+            if (MemberSymbolBoolComparison(a, b, i => i.IsOverride, out v)) {
+                return v;
+            }
+
+            return MemberSymbolCommonComparison(a, b);
+        }
+        
+        private int MemberSymbolCommonComparison(ISymbol a, ISymbol b) {
+            if (a.ContainingType.EQ(b.ContainingType)) {
+                var type = a.ContainingType;
+                var names = GetSymbolNames(a);
+                List<ISymbol> members = new List<ISymbol>();
+                AddSimilarNameMembers(type, names, members);
+                int indexOfA = members.IndexOf(a);
+                Contract.Assert(indexOfA != -1);
+                int indexOfB = members.IndexOf(b);
+                if (indexOfB == -1) {
+                    var m = a.ContainingType.GetMembers();
+                    indexOfA = m.IndexOf(a);
+                    indexOfB = m.IndexOf(b);
+                }
+                Contract.Assert(indexOfA != indexOfB);
+                return indexOfA.CompareTo(indexOfB);
+            }
+
+            bool isSubclassOf = IsSubclassOf(a.ContainingType, b.ContainingType);
+            return isSubclassOf ? 1 : -1;
+        }
+        
+        public static bool IsSubclassOf(ITypeSymbol child, ITypeSymbol parent) {
+            if (parent.SpecialType == SpecialType.System_Object) {
+                return true;
+            }
+
+            ITypeSymbol p = child;
+            if (p.EQ(parent)) {
+                return false;
+            }
+
+            while (p != null) {
+                if (p.EQ(parent)) {
+                    return true;
+                }
+                p = p.BaseType;
+            }
+            return false;
+        }
+        
+        public static bool IsExplicitInterfaceImplementation(ISymbol symbol) {
+            switch (symbol.Kind) {
+                case SymbolKind.Property: {
+                    IPropertySymbol property = (IPropertySymbol)symbol;
+                    if (property.GetMethod != null) {
+                        if (property.GetMethod.MethodKind == MethodKind.ExplicitInterfaceImplementation) {
+                            return true;
+                        }
+                        if (property.SetMethod is {MethodKind: MethodKind.ExplicitInterfaceImplementation}) {
+                            return true;
+                        }
+                    }
+                    break;
+                }
+                case SymbolKind.Method: {
+                    IMethodSymbol method = (IMethodSymbol)symbol;
+                    if (method.MethodKind == MethodKind.ExplicitInterfaceImplementation) {
+                        return true;
+                    }
+                    break;
+                }
+            }
+            return false;
+        }
+        
+        private bool MemberSymbolBoolComparison(ISymbol a, ISymbol b, Func<ISymbol, bool> boolFunc, out int v) {
+            bool boolOfA = boolFunc(a);
+            bool boolOfB = boolFunc(b);
+
+            if (boolOfA) {
+                if (boolOfB) {
+                    v = MemberSymbolCommonComparison(a, b);
+                } else {
+                    v = -1;
+                }
+                return true;
+            }
+
+            if (b.IsAbstract) {
+                v = 1;
+                return true;
+            }
+
+            v = 0;
+            return false;
+        }
+        
+        /// <summary>
+        /// 获取所有接口实现的数量
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        private int AllInterfaceImplementationsCount(ISymbol symbol) {
+            int count = 0;
+            HashSet<ISymbol> implicitImplementations = default;
+            if (_implicitInterfaceImplementations.TryGetValue(symbol, out var v)) {
+                implicitImplementations = v;
+            }
+            if (implicitImplementations != null) {
+                count = implicitImplementations.Count;
+            }
+            count += InterfaceImplementations(symbol).Count();
+            return count;
+        }
+        
+        public static IEnumerable<T> InterfaceImplementations<T>(T symbol) where T : ISymbol {
+            if (!symbol.IsStatic) {
+                var type = symbol.ContainingType;
+                if (type != null) {
+                    var interfaceSymbols = type.AllInterfaces.SelectMany(i => i.GetMembers().OfType<T>());
+                    return interfaceSymbols.Where(i => symbol.Equals(type.FindImplementationForInterfaceMember(i)));
+                }
+            }
+            return Array.Empty<T>();
+        }
+        
+        /// <summary>
+        /// 获取被重写的符号
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        public static ISymbol OverriddenSymbol(ISymbol symbol) {
+            switch (symbol.Kind) {
+                case SymbolKind.Method: {
+                    IMethodSymbol methodSymbol = (IMethodSymbol)symbol;
+                    return methodSymbol.OverriddenMethod;
+                }
+                case SymbolKind.Property: {
+                    IPropertySymbol propertySymbol = (IPropertySymbol)symbol;
+                    return propertySymbol.OverriddenProperty;
+                }
+                case SymbolKind.Event: {
+                    IEventSymbol eventSymbol = (IEventSymbol)symbol;
+                    return eventSymbol.OverriddenEvent;
+                }
+            }
+            return null;
+        }
+        
+        /// <summary>
+        /// 获取静态类的成员名
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        /// <exception cref="InvalidOperationException"></exception>
         private IdentifierNameExpression GetStaticClassMemberName(ISymbol symbol) {
+            // 拿到全部同名成员
             var sameNameMembers = GetStaticClassSameNameMembers(symbol);
             IdentifierNameExpression symbolExpression = null;
 
             int index = 0;
+            // 遍历每个同名成员
             foreach (ISymbol member in sameNameMembers) {
+                // 找到一个合适的方法名
                 IdentifierNameExpression identifierName = GetMethodNameFromIndex(symbol, index);
-                if (member.EQ(symbol)) {
+                // 判断是否是当前符号本身
+                if (SymbolEqualityComparer.Default.Equals(member, symbol)) {
                     symbolExpression = identifierName;
                 } else {
+                    // 如果不是本身并且没有被记录过
                     if (!_memberNames.ContainsKey(member)) {
                         _memberNames.Add(member, new SymbolExpression(identifierName));
                     }
@@ -711,6 +1175,238 @@ namespace Script.ToLua.Editor
             return symbolExpression;
         }
         
+        /// <summary>
+        /// 根据index获取方法名
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="index"></param>
+        /// <returns></returns>
+        private IdentifierNameExpression GetMethodNameFromIndex(ISymbol symbol, int index) {
+            Contract.Assert(index != -1);
+            if (index == 0) {
+                return symbol.Name;
+            }
+
+            while (true) {
+                string newName = symbol.Name + index;
+                // 如果当前类名可用
+                if (IsCurTypeNameEnable(symbol.ContainingType, newName)) {
+                    TryAddNewUsedName(symbol.ContainingType, newName);
+                    return newName;
+                }
+                ++index;
+            }
+        }
+        
+        /// <summary>
+        /// 添加typename到已用列表
+        /// </summary>
+        /// <param name="type"></param>
+        /// <param name="newName"></param>
+        private void TryAddNewUsedName(INamedTypeSymbol type, string newName) {
+            if (!_typeUsedNames.ContainsKey(type)) {
+                _typeUsedNames[type] = new HashSet<string>();
+            }
+
+            _typeUsedNames[type].Add(newName);
+        }
+        
+        /// <summary>
+        /// 判断当前typename是否可用 不在已用列表并且不在成员列表
+        /// </summary>
+        /// <param name="typeSymbol"></param>
+        /// <param name="newName"></param>
+        /// <returns></returns>
+        private bool IsCurTypeNameEnable(INamedTypeSymbol typeSymbol, string newName) {
+            return !IsTypeNameUsed(typeSymbol, newName) && typeSymbol.GetMembers(newName).IsEmpty;
+        }
+        
+        /// <summary>
+        /// 判断是否已经被添加到已用列表
+        /// </summary>
+        /// <param name="typeSymbol"></param>
+        /// <param name="newName"></param>
+        /// <returns></returns>
+        private bool IsTypeNameUsed(INamedTypeSymbol typeSymbol, string newName) {
+            if (_typeUsedNames.TryGetValue(typeSymbol, out var name)) {
+                if (name.Contains(newName)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        /// <summary>
+        /// 获取静态方法同名成员
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        private List<ISymbol> GetStaticClassSameNameMembers(ISymbol symbol) {
+            List<ISymbol> members = new List<ISymbol>();
+            var names = GetSymbolNames(symbol);
+            AddSimilarNameMembers(symbol.ContainingType, names, members);
+            return members;
+        }
+        
+        /// <summary>
+        /// 添加同名成员
+        /// </summary>
+        /// <param name="typeSymbol"></param>
+        /// <param name="names"></param>
+        /// <param name="outList">输出队列</param>
+        /// <param name="isWithoutPrivate">是否加入私有成员</param>
+        private void AddSimilarNameMembers(INamedTypeSymbol typeSymbol, List<string> names, List<ISymbol> outList, bool isWithoutPrivate = false) {
+            foreach (var member in typeSymbol.GetMembers()) {
+                if (member.IsOverride) {
+                    continue;
+                }
+
+                if (!isWithoutPrivate || member.DeclaredAccessibility != Accessibility.Private) {
+                    var memberNames = GetSymbolNames(member);
+                    if (memberNames.Exists(names.Contains)) {
+                        outList.Add(member);
+                    }
+                }
+            }
+        }
+        
+        /// <summary>
+        /// 获取符号名
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        private List<string> GetSymbolNames(ISymbol symbol) {
+            List<string> names = new List<string>();
+            switch (symbol.Kind) {
+                case SymbolKind.Property:{
+                    var propertySymbol = (IPropertySymbol)symbol;
+                    if (IsPropertyField(propertySymbol)) {
+                        names.Add(symbol.Name);
+                    } else {
+                        string baseName = GetSymbolBaseName(symbol);
+                        if (propertySymbol.IsReadOnly) {
+                            names.Add(LuaDefine.Tokens.Get + baseName);
+                        } else if (propertySymbol.IsWriteOnly) {
+                            names.Add(LuaDefine.Tokens.Set + baseName);
+                        } else {
+                            names.Add(LuaDefine.Tokens.Get + baseName);
+                            names.Add(LuaDefine.Tokens.Set + baseName);
+                        }
+                    }
+
+                    break;
+                }
+                case SymbolKind.Event:{
+                    var eventSymbol = (IEventSymbol)symbol;
+                    if (IsEventField(eventSymbol)) {
+                        names.Add(symbol.Name);
+                    } else {
+                        string baseName = GetSymbolBaseName(symbol);
+                        names.Add(LuaDefine.Tokens.Add + baseName);
+                        names.Add(LuaDefine.Tokens.Remove + baseName);
+                    }
+
+                    break;
+                }
+                default:
+                    names.Add(GetSymbolBaseName(symbol));
+                    break;
+            }
+            return names;
+        }
+        
+        bool IsPropertyField(IPropertySymbol symbol) {
+            return _isFieldProperties.GetOrAdd(symbol, symbol => {
+                bool? isMateField = metaProvider.IsPropertyField(symbol);
+                return isMateField ?? (!_implicitInterfaceImplementations.ContainsKey(symbol) && IsPropertyFieldInternal(symbol));
+            });
+        }
+        
+        private bool IsPropertyFieldInternal(IPropertySymbol symbol) {
+            if (IsOverridable(symbol) || IsInterfaceImplementation(symbol)) {
+                return false;
+            }
+
+            if (IsFromModuleOnly(symbol)) {
+                return IsModuleAutoField(symbol);
+            }
+
+            if (IsFromAssembly(symbol)) {
+                return false;
+            }
+
+            return IsAutoProperty(symbol);
+        }
+        
+        public static bool IsAutoProperty(IPropertySymbol symbol) {
+            var node = LuaSyntaxTreeBuilder.GetDeclaringSyntaxNode(symbol);
+            if (node != null) {
+                switch (node.Kind()) {
+                    case SyntaxKind.PropertyDeclaration: {
+                        var property = (PropertyDeclarationSyntax)node;
+                        bool hasGet = false;
+                        bool hasSet = false;
+                        if (property.AccessorList != null) {
+                            foreach (var accessor in property.AccessorList.Accessors) {
+                                if (accessor.Body != null || accessor.ExpressionBody != null) {
+                                    if (accessor.IsKind(SyntaxKind.GetAccessorDeclaration)) {
+                                        Contract.Assert(!hasGet);
+                                        hasGet = true;
+                                    } else {
+                                        Contract.Assert(!hasSet);
+                                        hasSet = true;
+                                    }
+                                }
+                            }
+                        } else {
+                            Contract.Assert(!hasGet);
+                            hasGet = true;
+                        }
+                        bool isField = !hasGet && !hasSet;
+                        if (isField) {
+                            if (HasCSharpLuaAttribute(property, DocumentStatement.AttributeFlags.NoField)) {
+                                isField = false;
+                            }
+                        }
+                        return isField;
+                    }
+                    case SyntaxKind.IndexerDeclaration: {
+                        return false;
+                    }
+                    case SyntaxKind.AnonymousObjectMemberDeclarator: {
+                        return true;
+                    }
+                    case SyntaxKind.Parameter: {
+                        return true;
+                    }
+                    default: {
+                        throw new InvalidOperationException();
+                    }
+                }
+            }
+            return false;
+        }
+        
+        public static bool HasCSharpLuaAttribute(SyntaxNode node, DocumentStatement.AttributeFlags attribute) {
+            var documentTrivia = node.GetLeadingTrivia().FirstOrDefault(i => i.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia));
+            if (documentTrivia != default) {
+                string document = documentTrivia.ToString();
+                if (document.Contains(DocumentStatement.ToString(attribute))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        public static bool IsFromAssembly(ISymbol symbol) {
+            return symbol.DeclaringSyntaxReferences.IsEmpty;
+        }
+        
+        /// <summary>
+        /// 获取符号的基础名，主要额外获取了显式接口实现
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
         private string GetSymbolBaseName(ISymbol symbol) {
             switch (symbol.Kind) {
                 case SymbolKind.Method: {
@@ -719,6 +1415,7 @@ namespace Script.ToLua.Editor
                     if (name != null) {
                         return name;
                     }
+                    // 获取方法的显式接口实现
                     var implementation = method.ExplicitInterfaceImplementations.FirstOrDefault();
                     if (implementation != null) {
                         return implementation.Name;
@@ -731,6 +1428,7 @@ namespace Script.ToLua.Editor
                         return string.Empty;
                     }
 
+                    // 获取属性的显式接口实现
                     var implementation = property.ExplicitInterfaceImplementations.FirstOrDefault();
                     if (implementation != null) {
                         return implementation.Name;
@@ -738,6 +1436,7 @@ namespace Script.ToLua.Editor
                     break;
                 }
                 case SymbolKind.Event: {
+                    // 获取事件的显式接口实现
                     IEventSymbol eventSymbol = (IEventSymbol)symbol;
                     var implementation = eventSymbol.ExplicitInterfaceImplementations.FirstOrDefault();
                     if (implementation != null) {
@@ -749,15 +1448,29 @@ namespace Script.ToLua.Editor
             return symbol.Name;
         }
         
-        internal bool IsFromLuaModule(ISymbol symbol) {
+        /// <summary>
+        /// 判断是否来自模块库
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        public bool IsFromLuaModule(ISymbol symbol) {
             return !symbol.DeclaringSyntaxReferences.IsEmpty || IsFromModuleOnly(symbol);
         }
 
+        /// <summary>
+        /// 判断是否来自模块库
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
         private bool IsFromModuleOnly(ISymbol symbol) {
             var luaModuleLibs = Setting.LuaModuleLibs;
             return luaModuleLibs != null && luaModuleLibs.Contains(symbol.ContainingAssembly.Name);
         }
         
+        /// <summary>
+        /// 检查原始定义
+        /// </summary>
+        /// <param name="symbol">返回原始定义</param>
         public static void CheckOriginalDefinition(ref ISymbol symbol) {
             if (symbol.Kind == SymbolKind.Method) {
                 IMethodSymbol methodSymbol = (IMethodSymbol)symbol;
@@ -770,18 +1483,29 @@ namespace Script.ToLua.Editor
             }
         }
         
+        /// <summary>
+        /// 获取方法的原始定义，主要特殊处理简化扩展方法
+        /// </summary>
+        /// <param name="symbol"></param>
         public static void CheckMethodDefinition(ref IMethodSymbol symbol) {
             if (symbol.IsExtensionMethod) {
+                // 判断是否是简化扩展方法
                 if (symbol.ReducedFrom != null && !SymbolEqualityComparer.Default.Equals(symbol.ReducedFrom, symbol)) {
                     symbol = symbol.ReducedFrom;
                 } else {
                     CheckSymbolDefinition(ref symbol);
                 }
             } else {
+                // 如果不是扩展方法，直接按其他符号处理
                 CheckSymbolDefinition(ref symbol);
             }
         }
         
+        /// <summary>
+        /// 获取符号原始定义
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <typeparam name="T"></typeparam>
         private static void CheckSymbolDefinition<T>(ref T symbol) where T : class, ISymbol {
             var originalDefinition = (T)symbol.OriginalDefinition;
             if (originalDefinition != symbol) {

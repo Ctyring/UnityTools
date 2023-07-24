@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -143,83 +144,390 @@ namespace Script.ToLua.Editor {
             return codeExpressions;
         }
         
+        /// <summary>
+        /// 填充使用模板生成代码必须的参数
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="argumentList"></param>
+        /// <param name="argumentExpressions">填充后的参数列表</param>
+        /// <returns>填充后的参数列表</returns>
+        /// <exception cref="InvalidOperationException"></exception>
         private List<Func<Expression>> FillCodeTemplateInvocationArguments(IMethodSymbol symbol, ArgumentListSyntax argumentList, List<Func<Expression>> argumentExpressions) {
             argumentExpressions ??= new List<Func<Expression>>();
             foreach (var argument in argumentList.Arguments) {
+                // 判断是否使用了冒号
                 if (argument.NameColon != null) {
                     string name = argument.NameColon.Name.Identifier.ValueText;
                     int index = -1;
+                    // 根据名字找到对应的参数
                     foreach (IParameterSymbol parameter in symbol.Parameters) {
                         if (parameter.Name == name) {
                             index = symbol.Parameters.IndexOf(parameter);
                             break;
                         }
                     }
+                    // 没找到
                     if (index == -1) {
                         throw new InvalidOperationException();
                     }
-                    argumentExpressions.AddAt(index, () => VisitExpression(argument.Expression));
+                    
+                    // argumentExpressions.AddAt(index, () => );
+                    if (index < argumentExpressions.Count) {
+                        // 填充对应下标的参数
+                        argumentExpressions[index] = () => VisitExpression(argument.Expression);
+                    } else {
+                        // 扩容
+                        int count = index - argumentExpressions.Count;
+                        for (int i = 0; i < count; ++i) {
+                            argumentExpressions.Add(default);
+                        }
+                        argumentExpressions.Add(() => VisitExpression(argument.Expression));
+                    }
                 } else {
+                    // 正常的参数，就直接遍历处理
                     argumentExpressions.Add(() => VisitExpression(argument.Expression));
                 }
             }
 
+            // 填充默认参数
             for (int i = 0; i < argumentExpressions.Count; ++i) {
                 argumentExpressions[i] ??= () => GetDefaultParameterValue(symbol.Parameters[i], argumentList.Parent, true);
             }
 
+            // 在末尾填充默认参数
             if (symbol.Parameters.Length > argumentList.Arguments.Count) {
                 argumentExpressions.AddRange(symbol.Parameters.Skip(argumentList.Arguments.Count).Where(i => !i.IsParams).Select(i => {
-                    var func = Expression () => GetDefaultParameterValue(i, argumentList.Parent, true);
-                    return func;
+                    Expression Func() => GetDefaultParameterValueExpression(i, argumentList, true);
+                    return (Func<Expression>)Func;
                 }));
             }
 
             return argumentExpressions;
         }
         
+        Expression GetDefaultParameterValueExpression(IParameterSymbol i, ArgumentListSyntax argumentList, bool isCheckCallerAttribute)
+        {
+            return GetDefaultParameterValue(i, argumentList.Parent, true);
+        }
+        
+        private Expression GetDefaultParameterValue(IParameterSymbol parameter, SyntaxNode node, bool isCheckCallerAttribute) {
+            Contract.Assert(parameter.HasExplicitDefaultValue);
+            Expression defaultValue = isCheckCallerAttribute ? CheckCallerAttribute(parameter, node) : null;
+            if (defaultValue == null) {
+                if (parameter.ExplicitDefaultValue == null && parameter.Type.IsValueType) {
+                    defaultValue = GetDefaultValueExpression(parameter.Type);
+                } else {
+                    defaultValue = GetLiteralExpression(parameter.ExplicitDefaultValue);
+                }
+            }
+            Contract.Assert(defaultValue != null);
+            return defaultValue;
+        }
+        
+        private Expression GetDefaultValueExpression(ITypeSymbol typeSymbol) {
+            if (typeSymbol.IsReferenceType) {
+                return IdentifierExpression.Nil;
+            }
+
+            if (typeSymbol.IsValueType) {
+                if (IsNullableType(typeSymbol)) {
+                    return IdentifierExpression.Nil;
+                }
+
+                if (typeSymbol.IsTupleType) {
+                    return GetValueTupleDefaultExpression(typeSymbol);
+                }
+
+                var predefinedValueType = GetPredefinedValueTypeDefaultValue(typeSymbol);
+                if (predefinedValueType != null) {
+                    return predefinedValueType;
+                }
+            }
+
+            var typeName = _generator.GetTypeName(typeSymbol);
+            return BuildDefaultValue(typeName);
+        }
+        
+        /// <summary>
+        /// 默认值调用表达式
+        /// </summary>
+        /// <param name="typeExpression"></param>
+        /// <returns></returns>
+        private static InvocationExpression BuildDefaultValue(Expression typeExpression) {
+            return new(LuaDefine.IdentifierName.SystemDefault, typeExpression);
+        }
+        
+        private Expression GetPredefinedValueTypeDefaultValue(ITypeSymbol typeSymbol) {
+            switch (typeSymbol.SpecialType) {
+                case SpecialType.None: {
+                    if (typeSymbol.TypeKind == TypeKind.Enum) {
+                        if (!_generator.IsConstantEnum(typeSymbol)) {
+                            return BuildEnumNoConstantDefaultValue(typeSymbol);
+                        }
+                        return ValExpression.Zero;
+                    }
+
+                    if (typeSymbol.IsTimeSpanType()) {
+                        return BuildDefaultValue(LuaDefine.IdentifierName.TimeSpan);
+                    }
+                    return null;
+                }
+                case SpecialType.System_Boolean: {
+                    return new LuaIdentifierLiteralExpressionSyntax(LuaDefine.IdentifierName.False);
+                }
+                case SpecialType.System_Char: {
+                    return new LuaCharacterLiteralExpression(default);
+                }
+                case SpecialType.System_SByte:
+                case SpecialType.System_Byte:
+                case SpecialType.System_Int16:
+                case SpecialType.System_UInt16:
+                case SpecialType.System_Int32:
+                case SpecialType.System_UInt32:
+                case SpecialType.System_Int64:
+                case SpecialType.System_UInt64: {
+                    return ValExpression.Zero;
+                }
+                case SpecialType.System_Single:
+                case SpecialType.System_Double: {
+                    return ValExpression.ZeroFloat;
+                }
+                case SpecialType.System_DateTime: {
+                    return BuildDefaultValue(LuaDefine.IdentifierName.DateTime);
+                }
+                default:
+                    return null;
+            }
+        }
+        
+        private Expression BuildEnumNoConstantDefaultValue(ITypeSymbol typeSymbol) {
+            var typeName = _generator.GetTypeName(typeSymbol);
+            var field = typeSymbol.GetMembers().OfType<IFieldSymbol>().FirstOrDefault(i => i.ConstantValue.Equals(0));
+            if (field != null) {
+                return typeName.MemberAccess(field.Name);
+            }
+            return typeName.Invocation(ValExpression.Zero);
+        }
+        
+        private Expression GetValueTupleDefaultExpression(ITypeSymbol typeSymbol) {
+            var elementTypes = GetTupleElementTypes(typeSymbol);
+            return BuildValueTupleCreateExpression(elementTypes.Select(GetDefaultValueExpression));
+        }
+        
+        /// <summary>
+        /// 构造对象创建表达式
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="node"></param>
+        /// <returns></returns>
+        private Expression GetObjectCreationExpression(IMethodSymbol symbol, BaseObjectCreationExpressionSyntax node) {
+            Expression creationExpression;
+            var expression = _generator.GetTypeName(symbol.ContainingType);
+            var invokeExpression = BuildObjectCreationInvocation(symbol, expression);
+            if (node.ArgumentList != null) {
+                var refOrOutArguments = new List<RefOrOutArgument>();
+                var arguments = BuildArgumentList(symbol, symbol.Parameters, node.ArgumentList, refOrOutArguments);
+                TryRemoveNilArgumentsAtTail(symbol, arguments);
+                invokeExpression.AddArguments(arguments);
+                creationExpression = refOrOutArguments.Count > 0
+                    ? BuildInvokeRefOrOut(node, invokeExpression, refOrOutArguments)
+                    : invokeExpression;
+            } else {
+                creationExpression = invokeExpression;
+            }
+            return creationExpression;
+        }
+        
+        private LuaInvocationExpressionSyntax BuildObjectCreationInvocation(IMethodSymbol symbol, LuaExpressionSyntax expression) {
+            int constructorIndex = GetConstructorIndex(symbol);
+            if (constructorIndex > 1) {
+                return new LuaInvocationExpressionSyntax(LuaIdentifierNameSyntax.SystemNew, expression, constructorIndex.ToString());
+            }
+            return new LuaInvocationExpressionSyntax(expression);
+        }
+        
+        /// <summary>
+        /// 构建值元组表达式
+        /// </summary>
+        /// <param name="expressions"></param>
+        /// <returns></returns>
+        private Expression BuildValueTupleCreateExpression(IEnumerable<Expression> expressions) {
+            return LuaDefine.IdentifierName.ValueTuple.Invocation(expressions);
+        }
+        
+        public static IEnumerable<ITypeSymbol> GetTupleElementTypes(ITypeSymbol typeSymbol) {
+            var nameSymbol = (INamedTypeSymbol)typeSymbol;
+            return nameSymbol.TupleElements.Select(i => i.Type);
+        }
+        
+        public static bool IsNullableType(ITypeSymbol type) {
+            return type.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+        }
+
+        public static bool IsNullableType(ITypeSymbol type, out ITypeSymbol elementType) {
+            elementType = NullableElementType(type);
+            return elementType != null;
+        }
+        
+        public static ITypeSymbol NullableElementType(ITypeSymbol type) {
+            return IsNullableType(type) ? ((INamedTypeSymbol)type).TypeArguments.First() : null;
+        }
+        
+        private enum CallerAttributeKind {
+            None,
+            Line,
+            Member,
+            FilePath,
+            ArgumentExpression,
+        }
+        
+        private Expression CheckCallerAttribute(IParameterSymbol parameter, SyntaxNode node) {
+            var kind = GetCallerAttributeKind(parameter);
+            switch (kind) {
+                case CallerAttributeKind.Line: {
+                    var lineSpan = node.SyntaxTree.GetLineSpan(node.Span);
+                    return lineSpan.StartLinePosition.Line + 1;
+                }
+                case CallerAttributeKind.Member: {
+                    string memberName = null;
+                    FindParent(node, i => {
+                        switch (i.Kind()) {
+                            case SyntaxKind.MethodDeclaration: {
+                                var method = (MethodDeclarationSyntax)i;
+                                memberName = method.Identifier.ValueText;
+                                return true;
+                            }
+                            case SyntaxKind.PropertyDeclaration: {
+                                var property = (PropertyDeclarationSyntax)i;
+                                memberName = property.Identifier.ValueText;
+                                return true;
+                            }
+                            case SyntaxKind.EventDeclaration: {
+                                var @event = (EventDeclarationSyntax)i;
+                                memberName = @event.Identifier.ValueText;
+                                return true;
+                            }
+                        }
+                        return false;
+                    });
+                    Contract.Assert(memberName != null);
+                    return new LuaStringLiteralExpressionSyntax(memberName);
+                }
+                case CallerAttributeKind.FilePath: {
+                    return BuildStringLiteralExpression(_generator.RemoveBaseFolder(node.SyntaxTree.FilePath));
+                }
+                case CallerAttributeKind.ArgumentExpression: {
+                    var invocation = (InvocationExpressionSyntax)node;
+                    var text = invocation.ArgumentList.Arguments.FirstOrDefault()?.ToString() ?? string.Empty;
+                    return new StringExpression(text);
+                }
+                default:
+                    return null;
+            }
+        }
+        
+        /// <summary>
+        /// 遍历node
+        /// </summary>
+        /// <param name="node"></param>
+        /// <returns></returns>
         private Expression VisitExpression(ExpressionSyntax node) {
+            // 遍历node
             var exp = (Expression)node.Accept(this);
+            // 处理类型转换
             CheckConversion(node, ref exp);
             return exp;
         }
         
+        /// <summary>
+        /// 处理类型转换
+        /// </summary>
+        /// <param name="node"></param>
+        /// <param name="expression"></param>
         private void CheckConversion(ExpressionSyntax node, ref Expression expression) {
             if (IsUserConversion(_semanticModel, node, out var methodSymbol)) {
+                // 构建转换方法
                 expression = BuildConversionExpression(methodSymbol, expression);
             }
         }
         
+        /// <summary>
+        /// 构建转换方法
+        /// </summary>
+        /// <param name="methodSymbol"></param>
+        /// <param name="expression"></param>
+        /// <returns></returns>
         private Expression BuildConversionExpression(IMethodSymbol methodSymbol, Expression expression) {
+            // 获取转换方法的模板
             var codeTemplate = _generator.metaProvider.GetMethodCodeTemplate(methodSymbol);
             if (codeTemplate != null) {
                 var args = new [] { expression };
+                // 构建
                 return BuildCodeTemplate(codeTemplate, null, null, args.Select<Expression, Func<Expression>>(i => () => i), null);
             }
-
+            
+            // 如果没有模板，构建成员访问的方法
             var memberAccess = GetOperatorMemberAccessExpression(methodSymbol);
             return new InvocationExpression(memberAccess, expression);
         }
         
+        /// <summary>
+        /// 构建成员访问表达式
+        /// </summary>
+        /// <param name="methodSymbol"></param>
+        /// <returns></returns>
         private Expression GetOperatorMemberAccessExpression(IMethodSymbol methodSymbol) {
-            var methodName = GetMemberName(methodSymbol);
+            // 处理成员名，并返回methodSymbol的名称
+            var methodName = _generator.GetMemberName(methodSymbol);
+            // 如果该方法的所属类型是当前类型符号，直接返回方法名(直接由curTypeSymbol调用)
             if (SymbolEqualityComparer.Default.Equals(CurTypeSymbol, methodSymbol.ContainingType)) {
                 return methodName;
             }
 
-            if (CurTypeSymbol.IsContainsInternalSymbol(methodSymbol)) {
+            // 判断当前类型符号是否包含该方法
+            if (IsContainsInternalSymbol(CurTypeSymbol, methodSymbol)) {
+                // 该方法名在当前类型符号中不存在，返回方法名
                 if (CurTypeSymbol.GetMembers(methodSymbol.Name).IsEmpty) {
                     return methodName;
                 }
             }
 
+            // 构造方法的上一层调用该方法的表达式
             var typeName = _generator.GetTypeName(methodSymbol.ContainingType);
             return typeName.MemberAccess(methodName);
         }
         
+        /// <summary>
+        /// 判断symbol是否是type包含在内部的符号
+        /// </summary>
+        /// <param name="type"></param>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
+        public static bool IsContainsInternalSymbol(INamedTypeSymbol type, ISymbol symbol) {
+            if (SymbolEqualityComparer.Default.Equals(type, symbol.ContainingType)) {
+                return true;
+            }
+
+            var containingType = type.ContainingType;
+            // 如果containingType不是泛型，继续判断
+            if (containingType?.IsGenericType == false) {
+                return IsContainsInternalSymbol(containingType, symbol);
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 判断是否是用户定义或隐式转换
+        /// </summary>
+        /// <param name="semanticModel"></param>
+        /// <param name="node"></param>
+        /// <param name="methodSymbol"></param>
+        /// <returns></returns>
         public static bool IsUserConversion(SemanticModel semanticModel, ExpressionSyntax node, out IMethodSymbol methodSymbol) {
             var conversion = semanticModel.GetConversion(node);
             if (conversion.IsUserDefined && conversion.IsImplicit) {
+                // 返回用于转换的方法
                 methodSymbol = conversion.MethodSymbol;
                 return true;
             }

@@ -649,6 +649,11 @@ namespace CSharpLua {
             return GetFieldMetaInfo(symbol)?.IsProperty ?? false;
         }
 
+        /// <summary>
+        /// 获取属性的元信息
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <returns></returns>
         private XmlMetaModel.PropertyModel GetPropertyMetaInfo(IPropertySymbol symbol) {
             if (MayHaveCodeMeta(symbol)) {
                 var info = GetTypeMetaInfo(symbol)?.GetPropertyModel(symbol.Name);
@@ -738,7 +743,7 @@ namespace CSharpLua {
         }
 
         /// <summary>
-        /// 获取代码的元信息
+        /// 获取方法的元信息
         /// </summary>
         /// <param name="symbol"></param>
         /// <param name="metaType"></param>
