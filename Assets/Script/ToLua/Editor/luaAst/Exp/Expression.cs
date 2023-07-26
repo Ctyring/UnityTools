@@ -5,6 +5,8 @@ namespace Script.ToLua.Editor.luaAst
 {
     public class Expression: LuaSyntaxNode
     {
+        public static readonly Expression EmptyExpression = new EmptyExpression();
+        
         public InvocationExpression Invocation()
         {
             return new InvocationExpression(this);
@@ -41,6 +43,15 @@ namespace Script.ToLua.Editor.luaAst
         
         public ParenthesizedExpression Parenthesized() {
             return new(this);
+        }
+        
+        /// <summary>
+        /// 构建左侧=右侧表达式
+        /// </summary>
+        /// <param name="right"></param>
+        /// <returns></returns>
+        public AssignmentExpression Assignment(Expression right) {
+            return new(this, right);
         }
     }
 }

@@ -1,5 +1,5 @@
 ﻿namespace Script.ToLua.Editor.luaAst {
-    public class StatementList {
-        
+    public class StatementList: Statement {
+        public LuaSyntaxList<Statement> Statements = new();
     }
 }

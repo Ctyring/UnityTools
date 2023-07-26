@@ -7,33 +7,46 @@ namespace Script.ToLua.Editor.luaAst
     /// </summary>
     public class InvocationExpression: Expression
     {
-        public List<Expression> arguments; // 参数列表
+        public ArgumentListSyntaxNode arguments; // 参数列表
         public Expression expression; // 函数表达式
 
+        public InvocationExpression(Expression expression, Expression argument1, Expression argument2) : this(expression) {
+            AddArgument(argument1);
+            AddArgument(argument2);
+        }
+
+        public InvocationExpression(Expression expression, Expression argument1, Expression argument2, Expression argument3) : this(expression) {
+            AddArgument(argument1);
+            AddArgument(argument2);
+            AddArgument(argument3);
+        }
+        
         public InvocationExpression(Expression expression)
         {
             this.expression = expression;
         }
         
         public InvocationExpression(Expression expression, Expression argument) : this(expression) {
-            this.arguments.Add(argument);
+            this.arguments.Arguments.Add(argument);
         }
-        
-        public InvocationExpression(Expression expression, Expression[] arguments) : this(expression) {
-            foreach (Expression argument in arguments) {
-                this.arguments.Add(argument);
-            }
+
+        public InvocationExpression(Expression expression, params Expression[] arguments) : this(expression) {
+            AddArguments(arguments);
         }
         
         public InvocationExpression(Expression expression, IEnumerable<Expression> arguments) : this(expression) {
             foreach (Expression argument in arguments) {
-                this.arguments.Add(argument);
+                this.arguments.Arguments.Add(argument);
             }
         }
 
         public void AddArgument(Expression argument)
         {
-            arguments.Add(argument);
+            arguments.Arguments.Add(argument);
+        }
+        
+        public void AddArguments(IEnumerable<Expression> arguments) {
+            this.arguments.AddArguments(arguments);
         }
     }
 }

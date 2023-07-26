@@ -73,15 +73,29 @@
     <Analyzer Include="E:\CsharpProject\UnityTools\Assets\Packages\Microsoft.CodeAnalysis.Analyzers.3.3.4\analyzers\dotnet\vb\de\Microsoft.CodeAnalysis.Analyzers.resources.dll" />
   </ItemGroup>
   <ItemGroup>
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\ArgumentListSyntaxNode.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\EqualsValueClause.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\AssignmentExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\DoubleExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\EmptyExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\InvocationExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ListExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\MultipleAssignmentExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\PropertyAdapterExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\PropertyOrEventIdentifierName.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\SymbolExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\TableExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\LocalVariableDeclaratorSyntax.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\LocalVariables.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\EqualsValueClauseList.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\EmptyStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\FloatExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\IdentifierNameExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\CharExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\LocalArea.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\LocalDeclarationStatement.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\StatementList.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\VariableDeclaration.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\MethodInfo.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ValExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Thunk.cs" />
@@ -103,7 +117,6 @@
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\DocumentStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\TestCecil.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\BlockCommon.cs" />
-     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\LocalVariableDeclaratorStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\XmlMetaProvider.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\BlankLineStatement.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\LuaSyntaxTreeBuilder.cs" />
@@ -122,10 +135,8 @@
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ConstExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\LuaDefine.cs" />
      <Folder Include="Assets\Script\ToLua\Editor" />
-     <Folder Include="Assets\Script\ToLua\Editor\luaAst\Statement" />
      <Folder Include="Assets\NuGet\Editor" />
      <Folder Include="Assets\Script\Test\Editor" />
-     <Folder Include="Assets\Script\ToLua\Editor\luaAst" />
      <Folder Include="Assets\Script\ToLua\Editor\CSharpAstHelper" />
      <Folder Include="Assets\Script\ToLua\Editor\CSharpToLuaHelper" />
      <Reference Include="UnityEngine">

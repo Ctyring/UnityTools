@@ -17,7 +17,7 @@ namespace Script.ToLua.Editor.luaAst
         void Init()
         {
             // 添加System
-            _statements.Add(new LocalVariableDeclaratorStatement(new IdentifierNameExpression("System"), new IdentifierNameExpression("System")));
+            _statements.Add(new LocalVariableDeclaratorSyntax(new IdentifierNameExpression("System"), new IdentifierNameExpression("System")));
         }
         
         public void AddStatement(Statement statement)

@@ -4,6 +4,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Script.ToLua.Editor.luaAst;
+using ArgumentListSyntax = Microsoft.CodeAnalysis.CSharp.Syntax.ArgumentListSyntax;
 
 namespace Script.ToLua.Editor {
     public partial class LuaSyntaxTreeBuilder {
@@ -38,11 +39,13 @@ namespace Script.ToLua.Editor {
                 else {
                     expression = GetObjectCreationExpression(symbol, node);
                 }
-            } else {
+            }
+            else {
+                // 判断是否是委托类型
                 var type = _semanticModel.GetSymbolInfo(node.Type).Symbol;
                 if (type?.Kind == SymbolKind.NamedType) {
                     var nameType = (INamedTypeSymbol)type;
-                    if (nameType.IsDelegateType()) {
+                    if (nameType.TypeKind == TypeKind.Delegate) {
                         Contract.Assert(node.ArgumentList!.Arguments.Count == 1);
                         var argument = node.ArgumentList.Arguments.First();
                         return argument.Expression.Accept(this);
@@ -50,11 +53,14 @@ namespace Script.ToLua.Editor {
                 }
 
                 Contract.Assert(!node.ArgumentList!.Arguments.Any());
-                var acptexpression = (ObjectCreationExpressionSyntax)node.Type.Accept(this);
+                var acptexpression = (Expression)node.Type.Accept(this);
                 expression = new InvocationExpression(acptexpression);
             }
 
+            // 初始化对象创建
             return GetObjectCreationInitializer(expression, node);
         }
+
+        
     }
 }

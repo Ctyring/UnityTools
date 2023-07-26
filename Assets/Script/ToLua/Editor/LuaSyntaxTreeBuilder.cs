@@ -71,6 +71,12 @@ namespace Script.ToLua.Editor
             }
         }
         
+        private BlockStatement CurBlock {
+            get {
+                return _blocks.Peek();
+            }
+        }
+        
         public LuaSyntaxTreeBuilder(LuaGenerator generator, SemanticModel semanticModel) {
             _generator = generator;
             _semanticModel = semanticModel;

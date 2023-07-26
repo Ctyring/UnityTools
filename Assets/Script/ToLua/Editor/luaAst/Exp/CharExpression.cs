@@ -1,7 +1,13 @@
-﻿namespace Script.ToLua.Editor.luaAst {
+﻿using Microsoft.CodeAnalysis.CSharp;
+
+namespace Script.ToLua.Editor.luaAst {
     public class CharExpression: ValExpression {
         
-        public CharExpression(string value, IdentifierNameExpression identifierName) : base(value, identifierName) {
+        public CharExpression(char character) : base(((int)character).ToString(), GetIdentifierToken(character)) {
+        }
+
+        private static string GetIdentifierToken(char character) {
+            return SyntaxFactory.Literal(character).Text;
         }
     }
 }

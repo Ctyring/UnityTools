@@ -1,5 +1,5 @@
 ﻿namespace Script.ToLua.Editor.luaAst {
-    public class EmptyExpression {
+    public class EmptyExpression: Expression {
         
     }
 }

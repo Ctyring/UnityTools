@@ -275,7 +275,7 @@ namespace Script.ToLua.Editor
                 var invocationExpression = new InvocationExpression(typeName);
                 foreach (Expression argument in typeArguments)
                 {
-                    invocationExpression.arguments.Add(argument);
+                    invocationExpression.arguments.Arguments.Add(argument);
                 }
                 Expression luaExpression = invocationExpression;
                 transform?.ImportGenericTypeName(ref luaExpression, namedTypeSymbol);
@@ -1511,6 +1511,13 @@ namespace Script.ToLua.Editor
             if (originalDefinition != symbol) {
                 symbol = originalDefinition;
             }
+        }
+        
+        public string RemoveBaseFolder(string path) {
+            if (!string.IsNullOrEmpty(Setting.BaseFolder)) {
+                return path.Remove(0, Setting.BaseFolder.Length).TrimStart(Path.DirectorySeparatorChar, '/');
+            }
+            return Path.GetFileName(path);
         }
     }
 }

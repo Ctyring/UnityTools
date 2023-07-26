@@ -5,8 +5,13 @@ namespace Script.ToLua.Editor.luaAst
     public class FunctionExpression: Expression
     {
         public List<IdentifierNameExpression> parameters;
-        public BlockStatement body;
+        public int TempCount;
 
+        public readonly BlockStatement body = new() {
+            openTag = Tokens.Empty,
+            closeTag = Keyword.End,
+        };
+        
         public FunctionExpression()
         {
             body = new BlockStatement();
@@ -22,5 +27,6 @@ namespace Script.ToLua.Editor.luaAst
         {
             body.AddStatement(statement);
         }
+
     }
 }
