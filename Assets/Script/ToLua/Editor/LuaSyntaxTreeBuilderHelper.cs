@@ -13,6 +13,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Script.ToLua.Editor.CSharpToLuaHelper;
 using Script.ToLua.Editor.luaAst;
+using Script.ToLua.Editor.luaAst.Exp;
 
 namespace Script.ToLua.Editor {
     public partial class LuaSyntaxTreeBuilder {
@@ -53,6 +54,67 @@ namespace Script.ToLua.Editor {
                 }
 
                 return false;
+            }
+        }
+        
+        private Expression BuildArrayTypeFromInitializer(IArrayTypeSymbol arrayType, InitializerExpressionSyntax initializer) {
+            var typeExpress = _generator.GetTypeName(arrayType);
+            var arrayExpression = new ArrayTypeAdapterExpression(typeExpress, new ArrayRankSpecifier(arrayType.Rank));
+            return BuildArrayCreationExpression(arrayType, arrayExpression, initializer);
+        }
+        
+        private Expression BuildArrayCreationExpression(IArrayTypeSymbol symbol, ArrayTypeAdapterExpression arrayType, InitializerExpressionSyntax initializer) {
+            if (initializer?.Expressions.Count > 0) {
+                if (arrayType.IsSimpleArray) {
+                    var initializerExpressions = initializer.Expressions.Select(i => (Expression)i.Accept(this)).ToList();
+                    return BuildArray(symbol, arrayType, initializerExpressions);
+                }
+
+                var rank = new LuaTableExpression { IsSingleLine = true };
+                var expressions = new List<Expression>();
+                FillMultiArrayInitializer(initializer, rank, expressions, true);
+                return BuildMultiArray(arrayType, rank, expressions);
+            }
+
+            {
+                if (arrayType.IsSimpleArray) {
+                    var size = arrayType.RankSpecifier.Sizes.FirstOrDefault() ?? NumberExpression.Zero;
+                    if (size is NumberExpression { Number: 0 }) {
+                        return BuildArray(symbol, arrayType, Array.Empty<Expression>());
+                    }
+                    return BuildArray(arrayType, size);
+                }
+
+                var rank = new LuaTableExpression { IsSingleLine = true };
+                foreach (var size in arrayType.RankSpecifier.Sizes) {
+                    rank.Add(size);
+                }
+                return BuildMultiArray(arrayType, rank);
+            }
+        }
+        
+        private Expression BuildMultiArray(Expression arrayType, Expression rank, List<Expression> elements = null) {
+            var invocation = new InvocationExpression(arrayType, rank);
+            if (elements != null) {
+                invocation.AddArgument(new LuaTableExpression(elements) { IsSingleLine = true });
+            }
+            return invocation;
+        }
+        
+        private void FillMultiArrayInitializer(InitializerExpressionSyntax initializer, LuaTableExpression rankSpecifier, List<Expression> expressions, bool isFirst) {
+            if (isFirst) {
+                rankSpecifier.Add(initializer.Expressions.Count);
+            }
+
+            int index = 0;
+            foreach (var expression in initializer.Expressions) {
+                if (expression.IsKind(SyntaxKind.ArrayInitializerExpression)) {
+                    FillMultiArrayInitializer((InitializerExpressionSyntax)expression, rankSpecifier, expressions, isFirst && index == 0);
+                } else {
+                    var item = (Expression)expression.Accept(this);
+                    expressions.Add(item);
+                }
+                ++index;
             }
         }
 
@@ -565,7 +627,7 @@ namespace Script.ToLua.Editor {
                             return BuildEnumNoConstantDefaultValue(typeSymbol);
                         }
 
-                        return ValExpression.Zero;
+                        return NumberExpression.Zero;
                     }
 
                     if (IsTimeSpanType(typeSymbol)) {
@@ -588,11 +650,11 @@ namespace Script.ToLua.Editor {
                 case SpecialType.System_UInt32:
                 case SpecialType.System_Int64:
                 case SpecialType.System_UInt64: {
-                    return ValExpression.Zero;
+                    return NumberExpression.Zero;
                 }
                 case SpecialType.System_Single:
                 case SpecialType.System_Double: {
-                    return ValExpression.ZeroFloat;
+                    return NumberExpression.ZeroFloat;
                 }
                 case SpecialType.System_DateTime: {
                     return BuildDefaultValue(LuaDefine.IdentifierName.DateTime);
@@ -614,7 +676,7 @@ namespace Script.ToLua.Editor {
                 return typeName.MemberAccess(field.Name);
             }
 
-            return typeName.Invocation(ValExpression.Zero);
+            return typeName.Invocation(NumberExpression.Zero);
         }
 
         private Expression GetValueTupleDefaultExpression(ITypeSymbol typeSymbol) {
@@ -635,6 +697,7 @@ namespace Script.ToLua.Editor {
             if (node.ArgumentList != null) {
                 var refOrOutArguments = new List<RefOrOutArgument>();
                 var arguments = BuildArgumentList(symbol, symbol.Parameters, node.ArgumentList, refOrOutArguments);
+                // 移除尾部的nil参数
                 TryRemoveNilArgumentsAtTail(symbol, arguments);
                 invokeExpression.arguments.Arguments.AddRange(arguments);
                 creationExpression = refOrOutArguments.Count > 0
@@ -766,10 +829,19 @@ namespace Script.ToLua.Editor {
                    expression == IdentifierExpression.Nil;
         }
 
+        /// <summary>
+        /// 构建参数列表
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="parameters"></param>
+        /// <param name="node"></param>
+        /// <param name="refOrOutArguments"></param>
+        /// <returns></returns>
         private List<Expression> BuildArgumentList(ISymbol symbol, ImmutableArray<IParameterSymbol> parameters,
             BaseArgumentListSyntax node, List<RefOrOutArgument> refOrOutArguments = null) {
             Contract.Assert(node != null);
             List<Expression> arguments = new List<Expression>();
+            // 遍历参数填充到arguments
             foreach (var argument in node.Arguments) {
                 FillInvocationArgument(arguments, argument, parameters, refOrOutArguments);
             }
@@ -780,10 +852,20 @@ namespace Script.ToLua.Editor {
 
         private void CheckInvocationDefaultArguments(ISymbol symbol, ImmutableArray<IParameterSymbol> parameters,
             List<Expression> arguments, BaseArgumentListSyntax node) {
+            // 构建参数节点信息(参数名，表达式)
             var argumentNodeInfos = node.Arguments.Select(i => (i.NameColon, i.Expression)).ToList();
             CheckInvocationDefaultArguments(symbol, parameters, arguments, argumentNodeInfos, node.Parent, true);
         }
 
+        /// <summary>
+        /// 填充默认参数到arguments
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="parameters"></param>
+        /// <param name="arguments"></param>
+        /// <param name="argumentNodeInfos"></param>
+        /// <param name="node"></param>
+        /// <param name="isCheckCallerAttribute"></param>
         private void CheckInvocationDefaultArguments(
             ISymbol symbol,
             ImmutableArray<IParameterSymbol> parameters,
@@ -791,15 +873,18 @@ namespace Script.ToLua.Editor {
             List<(NameColonSyntax Name, ExpressionSyntax Expression)> argumentNodeInfos,
             SyntaxNode node,
             bool isCheckCallerAttribute) {
+            // 填充末尾段
             if (parameters.Length > arguments.Count) {
                 var optionalParameters = parameters.Skip(arguments.Count);
                 foreach (IParameterSymbol parameter in optionalParameters) {
+                    // 如果是params参数，填充空数组
                     if (parameter.IsParams) {
                         var arrayType = (IArrayTypeSymbol)parameter.Type;
                         var elementType = _generator.GetTypeName(arrayType.ElementType);
                         arguments.Add(LuaDefine.IdentifierName.EmptyArray.Invocation(elementType));
                     }
                     else {
+                        // 否则填充默认值
                         Expression defaultValue =
                             GetDefaultParameterValue(parameter, node, isCheckCallerAttribute);
                         arguments.Add(defaultValue);
@@ -838,6 +923,7 @@ namespace Script.ToLua.Editor {
                 }
             }
 
+            // 填充默认值
             for (int i = 0; i < arguments.Count; ++i) {
                 if (arguments[i] == null) {
                     Expression defaultValue = GetDefaultParameterValue(parameters[i], node, isCheckCallerAttribute);
@@ -846,17 +932,28 @@ namespace Script.ToLua.Editor {
             }
         }
         
+        private Expression BuildArray(Expression arrayType, Expression size) {
+            return arrayType.Invocation(size);
+        }
+        
         private Expression BuildArray(IArrayTypeSymbol symbol, params Expression[] elements) {
             var baseType = _generator.GetTypeName(symbol.ElementType);
             var arrayType = new InvocationExpression(LuaDefine.IdentifierName.Array, baseType);
             return BuildArray(symbol, arrayType, elements);
         }
         
+        /// <summary>
+        /// 构建Array
+        /// </summary>
+        /// <param name="symbol"></param>
+        /// <param name="arrayType"></param>
+        /// <param name="elements"></param>
+        /// <returns></returns>
         private Expression BuildArray(IArrayTypeSymbol symbol, Expression arrayType, IList<Expression> elements) {
             var invocation = new InvocationExpression(arrayType);
             var table = new LuaTableExpression(elements);
             bool isElementNotNull = (symbol.ElementType.IsValueType && !IsNullableType(symbol.ElementType)) 
-                                    || elements.All(i => i is ValExpression && i != IdentifierExpression.Nil);
+                                    || elements.All(i => i is NumberExpression && i != IdentifierExpression.Nil);
             if (isElementNotNull) {
                 invocation.AddArgument(table);
                 invocation.arguments.IsCallSingleTable = true;
@@ -864,7 +961,7 @@ namespace Script.ToLua.Editor {
                 invocation.AddArgument(elements.Count);
                 invocation.AddArgument(table);
             }
-            table.IsSingleLine = elements.All(i => i is ValExpression || i is IdentifierNameExpression);
+            table.IsSingleLine = elements.All(i => i is NumberExpression || i is IdentifierNameExpression);
             return invocation;
         }
         
@@ -876,6 +973,14 @@ namespace Script.ToLua.Editor {
             return false;
         }
 
+        /// <summary>
+        /// 把参数添加到arguments
+        /// </summary>
+        /// <param name="arguments"></param>
+        /// <param name="node">参数节点</param>
+        /// <param name="parameters"></param>
+        /// <param name="refOrOutArguments"></param>
+        /// <exception cref="InvalidOperationException"></exception>
         private void FillInvocationArgument(List<Expression> arguments, ArgumentSyntax node,
             ImmutableArray<IParameterSymbol> parameters, List<RefOrOutArgument> refOrOutArguments) {
             var expression = (Expression)node.Expression.Accept(this);
@@ -890,7 +995,8 @@ namespace Script.ToLua.Editor {
             else {
                 CheckConversion(node.Expression, ref expression);
             }
-
+            
+            // 命名参数，不能直接按顺序排，要找index
             if (node.NameColon != null) {
                 string name = node.NameColon.Name.Identifier.ValueText;
                 int index = IndexOf(parameters, i => i.Name == name);
@@ -1584,7 +1690,7 @@ namespace Script.ToLua.Editor {
             var expression = (Expression)targetExpression.Accept(this);
             SyntaxKind kind = targetExpression.Kind();
             if ((kind >= SyntaxKind.NumericLiteralExpression && kind <= SyntaxKind.NullLiteralExpression) ||
-                (expression is ValExpression)) {
+                (expression is NumberExpression)) {
                 ProcessPrevIsInvokeStatement(targetExpression);
                 expression = expression.Parenthesized();
             }
@@ -1633,7 +1739,7 @@ namespace Script.ToLua.Editor {
             }
         }
 
-        public ValExpression GetConstExpression(ExpressionSyntax node) {
+        public NumberExpression GetConstExpression(ExpressionSyntax node) {
             var constValue = _semanticModel.GetConstantValue(node);
             if (constValue.HasValue) {
                 switch (constValue.Value) {
@@ -1659,14 +1765,14 @@ namespace Script.ToLua.Editor {
                         return new ConstExpression(LuaDefine.IdentifierName.Nil.name, "nil");
                 }
 
-                ValExpression expression = GetLiteralExpression(constValue.Value);
+                NumberExpression expression = GetLiteralExpression(constValue.Value);
                 return new ConstExpression(expression.value, node.ToString());
             }
 
             return null;
         }
 
-        private ValExpression GetLiteralExpression(object constantValue) {
+        private NumberExpression GetLiteralExpression(object constantValue) {
             if (constantValue != null) {
                 var code = Type.GetTypeCode(constantValue.GetType());
                 switch (code) {
@@ -1680,8 +1786,8 @@ namespace Script.ToLua.Editor {
                     case TypeCode.Boolean: {
                         bool v = (bool)constantValue;
                         return v
-                            ? new ValExpression(LuaDefine.IdentifierName.True.name, LuaDefine.IdentifierName.True)
-                            : new ValExpression(LuaDefine.IdentifierName.False.name, LuaDefine.IdentifierName.False);
+                            ? new NumberExpression(LuaDefine.IdentifierName.True.name, LuaDefine.IdentifierName.True)
+                            : new NumberExpression(LuaDefine.IdentifierName.False.name, LuaDefine.IdentifierName.False);
                     }
                     case TypeCode.Single: {
                         float v = (float)constantValue;
@@ -1704,7 +1810,7 @@ namespace Script.ToLua.Editor {
                 return new IdentifierExpression(constantValue.ToString());
             }
 
-            return new ValExpression(LuaDefine.IdentifierName.Nil.name, LuaDefine.IdentifierName.Nil);
+            return new NumberExpression(LuaDefine.IdentifierName.Nil.name, LuaDefine.IdentifierName.Nil);
         }
 
         private StringExpression BuildStringLiteralExpression(string value) {

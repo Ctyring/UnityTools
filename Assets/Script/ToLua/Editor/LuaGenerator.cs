@@ -1002,7 +1002,7 @@ namespace Script.ToLua.Editor
         }
         
         private int MemberSymbolCommonComparison(ISymbol a, ISymbol b) {
-            if (a.ContainingType.EQ(b.ContainingType)) {
+            if (SymbolEqualityComparer.Default.Equals(a.ContainingType, b.ContainingType)) {
                 var type = a.ContainingType;
                 var names = GetSymbolNames(a);
                 List<ISymbol> members = new List<ISymbol>();
@@ -1029,12 +1029,12 @@ namespace Script.ToLua.Editor
             }
 
             ITypeSymbol p = child;
-            if (p.EQ(parent)) {
+            if (SymbolEqualityComparer.Default.Equals(p, parent)) {
                 return false;
             }
 
             while (p != null) {
-                if (p.EQ(parent)) {
+                if (SymbolEqualityComparer.Default.Equals(p, parent)) {
                     return true;
                 }
                 p = p.BaseType;
@@ -1387,6 +1387,12 @@ namespace Script.ToLua.Editor
             return false;
         }
         
+        /// <summary>
+        /// 判断是否有CSharpLuaAttribute
+        /// </summary>
+        /// <param name="node"></param>
+        /// <param name="attribute"></param>
+        /// <returns></returns>
         public static bool HasCSharpLuaAttribute(SyntaxNode node, DocumentStatement.AttributeFlags attribute) {
             var documentTrivia = node.GetLeadingTrivia().FirstOrDefault(i => i.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia));
             if (documentTrivia != default) {

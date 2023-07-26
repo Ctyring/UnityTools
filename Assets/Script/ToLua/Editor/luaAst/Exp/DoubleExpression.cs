@@ -1,8 +1,24 @@
-﻿namespace Script.ToLua.Editor.luaAst {
-    public class DoubleExpression: ValExpression {
-        public double value;
-        public DoubleExpression(double value) : base(value.ToString(), new IdentifierNameExpression(value.ToString())) {
-            this.value = value;
+﻿using System.Globalization;
+using Script.ToLua.Editor.luaAst.Exp;
+
+namespace Script.ToLua.Editor.luaAst {
+    public class DoubleExpression: Exp.NumberExpression {
+        private readonly double number_;
+
+        public DoubleExpression(double number) {
+            number_ = number;
+        }
+
+        public override double Number {
+            get {
+                return number_;
+            }
+        }
+
+        public override string Text {
+            get {
+                return number_.ToString("G9", CultureInfo.InvariantCulture);
+            }
         }
     }
 }

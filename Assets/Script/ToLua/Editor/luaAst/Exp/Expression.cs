@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using Script.ToLua.Editor.luaAst;
+using Script.ToLua.Editor.luaAst.Exp;
 
 namespace Script.ToLua.Editor.luaAst
 {
@@ -37,7 +38,7 @@ namespace Script.ToLua.Editor.luaAst
         }
         
         public static implicit operator Expression(double number) {
-            ValExpression numberLiteral = number;
+            Exp.NumberExpression numberLiteral = number;
             return numberLiteral;
         }
         

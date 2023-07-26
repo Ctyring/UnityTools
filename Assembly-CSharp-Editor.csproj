@@ -74,13 +74,17 @@
   </ItemGroup>
   <ItemGroup>
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\ArgumentListSyntaxNode.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\ArrayRankSpecifier.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\EqualsValueClause.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ArrayTypeAdapterExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\AssignmentExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\DoubleExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\EmptyExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\InvocationExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ListExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\LiteralExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\MultipleAssignmentExpression.cs" />
+     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\NumberExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\PropertyAdapterExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\PropertyOrEventIdentifierName.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\SymbolExpression.cs" />
@@ -97,7 +101,6 @@
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Statement\StatementList.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\VariableDeclaration.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\MethodInfo.cs" />
-     <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\ValExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Thunk.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\FunctionExpression.cs" />
      <Compile Include="Assets\Script\ToLua\Editor\luaAst\Exp\StringExpression.cs" />

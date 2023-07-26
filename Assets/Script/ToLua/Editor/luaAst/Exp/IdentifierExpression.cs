@@ -1,14 +1,19 @@
-﻿namespace Script.ToLua.Editor.luaAst {
-    public class IdentifierExpression: ValExpression {
+﻿using Script.ToLua.Editor.luaAst.Exp;
+
+namespace Script.ToLua.Editor.luaAst {
+    public class IdentifierExpression: LiteralExpression {
         public IdentifierNameExpression identifierName;
-        public IdentifierExpression(string value) : base(value, new IdentifierNameExpression(value)) {
-            identifierName = new IdentifierNameExpression(value);
+        public IdentifierExpression(string text) : this((IdentifierNameExpression)text) {
         }
-        public IdentifierExpression(IdentifierNameExpression identifier): base(identifier.name, identifier) {
+
+        public IdentifierExpression(IdentifierNameExpression identifier) {
             identifierName = identifier;
         }
-        public static implicit operator IdentifierExpression(string valueText) {
-            return new(valueText);
+
+        public override string Text {
+            get {
+                return identifierName.name;
+            }
         }
         
         public static readonly IdentifierExpression Nil = new(LuaDefine.Keyword.Nil);

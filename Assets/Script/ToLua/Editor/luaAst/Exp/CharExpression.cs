@@ -1,7 +1,7 @@
 ﻿using Microsoft.CodeAnalysis.CSharp;
 
 namespace Script.ToLua.Editor.luaAst {
-    public class CharExpression: ValExpression {
+    public class CharExpression: ConstExpression {
         
         public CharExpression(char character) : base(((int)character).ToString(), GetIdentifierToken(character)) {
         }
